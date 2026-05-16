@@ -1,0 +1,46 @@
+Downloads split layout
+======================
+
+A) Private app (NO HTTP URL) — deploy entire folder to:
+   /home/sumbap/private_files/downloads/
+
+   - Copy bootstrap.example.php → bootstrap.php and set absolute paths:
+     documents_dir, registry_file, log_dir, public_download_url
+   - Copy docupload_config.example.php → docupload_config.php (password, etc.)
+   - Ensure documents/ exists (uploads go here)
+   - Registry file path in bootstrap (e.g. .registry.json) — parent folder must exist
+
+B) Public site — document root for download.sumbaprop.com:
+   Deploy contents of download_site/ here (file.php + admin/ including admin/docupload.php and admin/index.php).
+
+   In BOTH file.php and admin/docupload.php, set:
+   define('DOWNLOADS_PRIVATE_ROOT', '/home/sumbap/private_files/downloads');
+   (must match (A) exactly)
+
+C) Logs:
+   webdisk/peter/downloads/ — monthly files downloads_YYYY-MM.log, php_errors_YYYY-MM.log
+
+D) Generated links:
+   Must use bootstrap public_download_url, e.g.
+   https://download.sumbaprop.com/file.php?file=...&password=...
+
+E) Main domain sumbaprop.com:
+   - Point document root to public_html/main (move current site there), OR
+   - Remove old public_html/private so nothing sensitive remains under the main host.
+   Do not leave docupload or files under the main domain if you want isolation.
+
+Optional prettier URL (password in path) — Apache example (document root = download_site):
+
+  RewriteEngine On
+  RewriteRule ^([0-9a-f]{32}\.[a-z0-9]{1,12})/([0-9a-f]{14})$ file.php?file=$1&password=$2 [L,QSA]
+
+Generated links must still match what you set as public_download_url in bootstrap.php.
+
+Blank page on file.php or admin:
+   - Previously init.php ran outside try/catch — upload the latest file.php and admin/docupload.php from the repo.
+   - Use full URL: .../admin/docupload.php (deploy admin/index.php to redirect /admin/ → docupload.php).
+   - Set DOWNLOADS_SHOW_SETUP_ERRORS to true in file.php / admin/docupload.php briefly to see the error text.
+   - Common causes: wrong DOWNLOADS_PRIVATE_ROOT, missing bootstrap.php, PHP cannot read private_files/downloads.
+   - You must copy bootstrap.example.php to bootstrap.php on the server (the .example file is never loaded).
+   - Upload the contents of downloads_private/ directly into private_files/downloads (avoid an extra nesting folder).
+   - Use admin/setup_check.php?key=... once (edit path + secret inside that file), then delete setup_check.php.

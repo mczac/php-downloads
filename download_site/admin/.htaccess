@@ -1,0 +1,5 @@
+# Prefer index.php when requesting /admin/
+DirectoryIndex index.php
+
+# No listing inside admin/
+Options -Indexes
