@@ -54,6 +54,104 @@ function docupload_max_expiry(array $c): int
     return max(1, min(3650, $d));
 }
 
+/** Path to consecutive-failure counter (JSON). Lives beside bootstrap.php; not web-accessible. */
+function docupload_login_lockout_state_path(): string
+{
+    return DOWNLOADS_PRIVATE_ROOT . DIRECTORY_SEPARATOR . '.docupload_login_lockout.json';
+}
+
+/**
+ * Maximum consecutive wrong passphrase attempts before lockout. 0 = feature disabled.
+ */
+function docupload_login_lockout_threshold(array $config): int
+{
+    $t = isset($config['login_lockout_threshold']) ? (int) $config['login_lockout_threshold'] : 0;
+    if ($t <= 0) {
+        return 0;
+    }
+
+    return min(1000, $t);
+}
+
+/** @return array{consecutive_failures: int} */
+function docupload_login_lockout_read_state(): array
+{
+    $path = docupload_login_lockout_state_path();
+    if (!is_readable($path)) {
+        return ['consecutive_failures' => 0];
+    }
+
+    $raw = @file_get_contents($path);
+    if ($raw === false || trim($raw) === '') {
+        return ['consecutive_failures' => 0];
+    }
+
+    try {
+        $data = json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
+    } catch (Throwable $e) {
+        return ['consecutive_failures' => 0];
+    }
+
+    if (!is_array($data)) {
+        return ['consecutive_failures' => 0];
+    }
+
+    $n = isset($data['consecutive_failures']) ? (int) $data['consecutive_failures'] : 0;
+
+    return ['consecutive_failures' => max(0, $n)];
+}
+
+function docupload_login_lockout_write_state(array $state): void
+{
+    $path = docupload_login_lockout_state_path();
+    $dir = dirname($path);
+    if (!is_dir($dir) || (!is_writable($dir) && !is_writable($path))) {
+        return;
+    }
+
+    try {
+        $payload = json_encode(
+            ['consecutive_failures' => max(0, (int) ($state['consecutive_failures'] ?? 0))],
+            JSON_THROW_ON_ERROR
+        );
+    } catch (Throwable $e) {
+        return;
+    }
+
+    $tmp = $path . '.' . bin2hex(random_bytes(4)) . '.tmp';
+    if (@file_put_contents($tmp, $payload . "\n", LOCK_EX) === false) {
+        return;
+    }
+    @rename($tmp, $path);
+}
+
+function docupload_login_lockout_reset(): void
+{
+    $path = docupload_login_lockout_state_path();
+    if (is_file($path)) {
+        @unlink($path);
+    }
+}
+
+/**
+ * @param array{consecutive_failures: int} $state
+ */
+function docupload_login_lockout_is_locked(array $state, int $threshold): bool
+{
+    return $threshold > 0 && $state['consecutive_failures'] >= $threshold;
+}
+
+function docupload_login_lockout_record_failure(int $threshold): void
+{
+    if ($threshold <= 0) {
+        return;
+    }
+
+    $state = docupload_login_lockout_read_state();
+    $state['consecutive_failures']++;
+    docupload_login_lockout_write_state($state);
+}
+
 /**
  * One footer sentence for a batch of links sharing the same UTC calendar expiry day.
  *
@@ -476,10 +574,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!docupload_verify_csrf($csrf)) {
             doc_redirect();
         }
+        $lockThresh = docupload_login_lockout_threshold($config);
+        if ($lockThresh > 0) {
+            $lockState = docupload_login_lockout_read_state();
+            if (docupload_login_lockout_is_locked($lockState, $lockThresh)) {
+                $_SESSION['docupload_flash'] = [
+                    'error' => 'Portal login is locked after too many failed passphrase attempts. Someone with server access must reset .docupload_login_lockout.json next to bootstrap.php (set consecutive_failures to 0 or delete the file), then update the passphrase in docupload_config.php if it may have been guessed.',
+                ];
+                doc_redirect();
+            }
+        }
         $pass = isset($_POST['password']) ? (string) $_POST['password'] : '';
         if (hash_equals(trim((string) $config['password']), $pass)) {
+            docupload_login_lockout_reset();
             $_SESSION['docupload_auth'] = true;
             doc_redirect();
+        }
+        if ($lockThresh > 0) {
+            docupload_login_lockout_record_failure($lockThresh);
+            $lockState = docupload_login_lockout_read_state();
+            if (docupload_login_lockout_is_locked($lockState, $lockThresh)) {
+                $_SESSION['docupload_flash'] = [
+                    'error' => 'Portal login is now locked after repeated wrong passphrase attempts. Reset .docupload_login_lockout.json (set consecutive_failures to 0 or delete the file) and update docupload_config.php as needed.',
+                ];
+                doc_redirect();
+            }
         }
         $_SESSION['docupload_flash'] = ['error' => 'Wrong passphrase.'];
         doc_redirect();
@@ -739,6 +858,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     doc_redirect();
 }
 
+/* ---------- GET geo IP detail (JSON, signed-in admin only) ---------- */
+if (isset($_GET['geo_ip']) && docupload_signed_in()) {
+    $gip = trim((string) $_GET['geo_ip']);
+    header('Content-Type: application/json; charset=UTF-8');
+    header('Cache-Control: private, no-store');
+    header('X-Robots-Tag: noindex');
+
+    try {
+        if ($gip === '' || !filter_var($gip, FILTER_VALIDATE_IP)) {
+            echo json_encode([
+                'ok' => false,
+                'ip' => $gip,
+                'lat' => null,
+                'lng' => null,
+                'city' => '',
+                'region' => '',
+                'country' => '',
+                'isp' => '',
+                'accuracy' => '',
+                'message' => 'Invalid IP address',
+            ], JSON_THROW_ON_ERROR);
+            exit;
+        }
+
+        echo json_encode(downloads_geo_ip_detail_for_map($gip), JSON_THROW_ON_ERROR);
+        exit;
+    } catch (Throwable $e) {
+        http_response_code(500);
+        echo '{"ok":false,"message":"Server error"}';
+        exit;
+    }
+}
+
 /* ---------- GET (HTML) ---------- */
 
 header('Content-Type: text/html; charset=UTF-8');
@@ -749,6 +901,9 @@ unset($_SESSION['docupload_flash']);
 
 if (!docupload_signed_in()) {
     $err = (is_array($flash) && isset($flash['error'])) ? (string) $flash['error'] : '';
+    $lockThreshUi = docupload_login_lockout_threshold($config);
+    $lockStateUi = docupload_login_lockout_read_state();
+    $loginLockedUi = docupload_login_lockout_is_locked($lockStateUi, $lockThreshUi);
     ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -763,22 +918,29 @@ if (!docupload_signed_in()) {
         label { display: block; font-size: 0.82rem; margin-bottom: 0.35rem; color: #a1a1aa; }
         input[type="password"] { width: 100%; box-sizing: border-box; padding: 0.55rem 0.65rem; border-radius: 8px; border: 1px solid #3f3f46; background: #09090b; color: inherit; margin-bottom: 1rem; }
         button { width: 100%; padding: 0.6rem; border-radius: 8px; border: none; background: #2563eb; color: #fff; font-weight: 600; cursor: pointer; font-size: 0.95rem; }
-        .err { background: #450a0a; border: 1px solid #991b1b; padding: 0.65rem; border-radius: 8px; font-size: 0.88rem; margin-bottom: 1rem; }
+        .err { background: #450a0a; border: 1px solid #991b1b; padding: 0.65rem; border-radius: 8px; font-size: 0.88rem; margin-bottom: 1rem; line-height: 1.45; }
+        .err code { font-size: 0.8em; word-break: break-word; }
+        .hint { font-size: 0.82rem; color: #a1a1aa; line-height: 1.45; margin: 0 0 1rem; }
     </style>
 </head>
 <body>
     <div class="box">
         <h1>Document portal</h1>
-        <?php if ($err !== ''): ?>
-            <div class="err"><?php echo htmlspecialchars($err, ENT_QUOTES, 'UTF-8'); ?></div>
+        <?php if ($loginLockedUi): ?>
+            <div class="err">Portal login is locked after too many wrong passphrase attempts.</div>
+            <p class="hint">Someone with server access must reset <code>.docupload_login_lockout.json</code> in your private downloads folder (set <code>consecutive_failures</code> to <code>0</code> or delete the file) and update the passphrase in <code>docupload_config.php</code> if needed.</p>
+        <?php else: ?>
+            <?php if ($err !== ''): ?>
+                <div class="err"><?php echo htmlspecialchars($err, ENT_QUOTES, 'UTF-8'); ?></div>
+            <?php endif; ?>
+            <form method="post" action="">
+                <input type="hidden" name="csrf" value="<?php echo htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8'); ?>">
+                <input type="hidden" name="action" value="login">
+                <label for="pw">Passphrase</label>
+                <input id="pw" name="password" type="password" autocomplete="current-password" required>
+                <button type="submit">Sign in</button>
+            </form>
         <?php endif; ?>
-        <form method="post" action="">
-            <input type="hidden" name="csrf" value="<?php echo htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8'); ?>">
-            <input type="hidden" name="action" value="login">
-            <label for="pw">Passphrase</label>
-            <input id="pw" name="password" type="password" autocomplete="current-password" required>
-            <button type="submit">Sign in</button>
-        </form>
     </div>
 </body>
 </html>
@@ -888,6 +1050,9 @@ $flashNewLink = (is_array($flash) && isset($flash['new_link'])) ? (string) $flas
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title><?php echo htmlspecialchars($pageTitle, ENT_QUOTES, 'UTF-8'); ?></title>
+    <?php if ($activeTab === 'stats'): ?>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+    <?php endif; ?>
     <style>
         :root {
             --bg: #f7f6fb;
@@ -956,7 +1121,99 @@ $flashNewLink = (is_array($flash) && isset($flash['new_link'])) ? (string) $flas
         .stats-toolbar .field { margin: 0; }
         .stats-toolbar select { max-width: 12rem; }
         .stat-chips { display: flex; flex-wrap: wrap; gap: 0.45rem; align-items: center; }
-        .stats-table-wrap { overflow-x: auto; margin-top: 0.5rem; }
+        .stats-table-wrap {
+            overflow-x: auto;
+            margin-top: 0.5rem;
+            -webkit-overflow-scrolling: touch;
+        }
+        .stats-table-wrap table.stats-table { width: 100%; min-width: 72rem; border-collapse: collapse; font-size: 0.82rem; }
+        td.stats-result-cell { white-space: nowrap; vertical-align: middle; }
+        td.stats-ip-cell { white-space: nowrap; vertical-align: middle; max-width: none; }
+        .stats-ip-trigger {
+            cursor: help;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-size: 0.78rem;
+            font-weight: 650;
+            padding: 0.18rem 0.45rem;
+            border-radius: 7px;
+            border: 1px solid var(--border);
+            background: color-mix(in srgb, var(--card) 88%, var(--accent));
+            color: var(--accent);
+            display: inline-block;
+            vertical-align: baseline;
+        }
+        .stats-ip-trigger:hover, .stats-ip-trigger:focus-visible {
+            border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+            outline: none;
+            box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
+        }
+        .stats-ip-popover {
+            position: fixed;
+            z-index: 10050;
+            width: min(390px, calc(100vw - 24px));
+            overflow: hidden;
+            border-radius: 14px;
+            border: 1px solid var(--border);
+            background: var(--card);
+            box-shadow: var(--shadow-portal), 0 24px 80px rgba(0, 0, 0, 0.35);
+            pointer-events: none;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.14s ease, visibility 0.14s ease;
+        }
+        .stats-ip-popover.is-visible { pointer-events: auto; opacity: 1; visibility: visible; }
+        .stats-ip-popover header {
+            border-bottom: 1px solid var(--border);
+            padding: 0.65rem 1rem;
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 0.65rem;
+            background: color-mix(in srgb, var(--portal-secondary) 65%, var(--card));
+        }
+        .stats-ip-popover header .ip-line { font-size: 0.82rem; font-weight: 650; font-family: ui-monospace, monospace; }
+        .stats-ip-popover header .acc-line { font-size: 0.72rem; color: var(--muted); margin-top: 0.15rem; }
+        .stats-ip-popover .geo-tag {
+            flex-shrink: 0;
+            font-size: 0.65rem;
+            font-weight: 650;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            padding: 0.2rem 0.45rem;
+            border-radius: 999px;
+            background: var(--gradient-brand);
+            color: #fff;
+        }
+        .stats-ip-popover .stats-ip-map {
+            height: 208px;
+            background: var(--portal-secondary);
+            border-bottom: 1px solid var(--border);
+        }
+        .stats-ip-popover .stats-ip-map .leaflet-container {
+            font-family: inherit;
+            background: var(--portal-secondary);
+        }
+        .stats-ip-popover .geo-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.65rem 0.85rem;
+            padding: 0.85rem 1rem 1rem;
+            font-size: 0.78rem;
+        }
+        .stats-ip-popover .geo-k {
+            margin: 0;
+            font-size: 0.65rem;
+            font-weight: 650;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--muted);
+        }
+        .stats-ip-popover .geo-v {
+            margin: 0.12rem 0 0;
+            font-weight: 600;
+            word-break: break-word;
+        }
+        .stats-ip-popover .geo-msg { padding: 0.85rem 1rem 1rem; font-size: 0.82rem; color: var(--muted); }
         td.ua-cell { max-width: 12rem; font-size: 0.78rem; color: var(--muted); word-break: break-word; }
         td.stats-meta-cell { max-width: 11rem; font-size: 0.78rem; color: var(--muted); word-break: break-word; }
         .stack-portal { display: flex; flex-direction: column; gap: 1.25rem; }
@@ -1136,7 +1393,16 @@ $flashNewLink = (is_array($flash) && isset($flash['new_link'])) ? (string) $flas
         th { color: var(--muted); font-weight: 600; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.03em; }
         code { font-family: ui-monospace, monospace; font-size: 0.78rem; word-break: break-all; }
         .muted { color: var(--muted); font-size: 0.85rem; }
-        .pill { display: inline-block; padding: 0.12rem 0.45rem; border-radius: 999px; font-size: 0.72rem; font-weight: 600; }
+        .pill {
+            display: inline-flex;
+            align-items: center;
+            white-space: nowrap;
+            padding: 0.18rem 0.5rem;
+            border-radius: 999px;
+            font-size: 0.7rem;
+            font-weight: 650;
+            line-height: 1.2;
+        }
         .pill.bad { background: #fee2e2; color: #991b1b; }
         .pill.ok { background: #dcfce7; color: #166534; }
         .pill.warn { background: #fef3c7; color: #92400e; }
@@ -1406,7 +1672,7 @@ $flashNewLink = (is_array($flash) && isset($flash['new_link'])) ? (string) $flas
         <?php else: ?>
         <div class="card">
             <p class="muted" style="margin-top:0;">Download log (<code>downloads_YYYY-MM.log</code> in <code>log_dir</code>). Newest first, last 500 lines. Errors also go to <code>php_errors_YYYY-MM.log</code>.</p>
-            <p class="muted" style="margin-top:0.5rem;font-size:0.85rem;">Each row stores <code>CF-IPCountry</code> (if behind Cloudflare), <code>Accept-Language</code>, and <code>Referer</code> when the client sends them. Country prefers that header, then optional GeoLite2 (<code>geoip_country_mmdb</code>), then cached HTTPS geolocation (ipwho.is) — enabled by default unless you set <code>geoip_allow_online_lookup</code> to <code>false</code> in <code>bootstrap.php</code>.</p>
+            <p class="muted" style="margin-top:0.5rem;font-size:0.85rem;">Each row stores <code>CF-IPCountry</code> (if behind Cloudflare), <code>Accept-Language</code>, and <code>Referer</code> when the client sends them. Country prefers that header, then optional GeoLite2 (<code>geoip_country_mmdb</code>), then cached HTTPS geolocation (ipwho.is) — enabled by default unless you set <code>geoip_allow_online_lookup</code> to <code>false</code> in <code>bootstrap.php</code>. Hover an IP in the table for an approximate map (uses cached ipwho.is; admin-only).</p>
 
             <?php if ($statsLogPath === ''): ?>
                 <div class="banner bad"><code>log_dir</code> is not set — fix <code>bootstrap.php</code> and reload.</div>
@@ -1453,16 +1719,16 @@ $flashNewLink = (is_array($flash) && isset($flash['new_link'])) ? (string) $flas
                         <p class="muted">No rows match the current filter.</p>
                     <?php else: ?>
                         <div class="stats-table-wrap">
-                            <table>
+                            <table class="stats-table">
                                 <thead>
                                     <tr>
                                         <th>Time (UTC)</th>
                                         <th>Result</th>
                                         <th>Document / detail</th>
                                         <th>Country</th>
+                                        <th>IP</th>
                                         <th>Language</th>
                                         <th>Referrer</th>
-                                        <th>IP</th>
                                         <th>Browser</th>
                                     </tr>
                                 </thead>
@@ -1474,7 +1740,7 @@ $flashNewLink = (is_array($flash) && isset($flash['new_link'])) ? (string) $flas
                                         ?>
                                         <tr>
                                             <td><?php echo htmlspecialchars($when, ENT_QUOTES, 'UTF-8'); ?></td>
-                                            <td>
+                                            <td class="stats-result-cell">
                                                 <?php if ($sr['result'] === 'ok'): ?>
                                                     <span class="pill ok"><?php echo htmlspecialchars($sr['label'], ENT_QUOTES, 'UTF-8'); ?></span>
                                                 <?php else: ?>
@@ -1483,9 +1749,15 @@ $flashNewLink = (is_array($flash) && isset($flash['new_link'])) ? (string) $flas
                                             </td>
                                             <td><?php echo htmlspecialchars($sr['file_note'], ENT_QUOTES, 'UTF-8'); ?></td>
                                             <td class="stats-meta-cell"><?php echo htmlspecialchars($sr['country_display'], ENT_QUOTES, 'UTF-8'); ?></td>
+                                            <td class="stats-ip-cell">
+                                                <?php if ($sr['ip'] !== '' && $sr['ip'] !== '-'): ?>
+                                                    <span class="stats-ip-trigger" tabindex="0" data-ip="<?php echo htmlspecialchars($sr['ip'], ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars($sr['ip'], ENT_QUOTES, 'UTF-8'); ?></span>
+                                                <?php else: ?>
+                                                    <span class="muted">—</span>
+                                                <?php endif; ?>
+                                            </td>
                                             <td class="stats-meta-cell"><code><?php echo htmlspecialchars($sr['lang_primary'], ENT_QUOTES, 'UTF-8'); ?></code></td>
                                             <td class="stats-meta-cell" title="<?php echo htmlspecialchars($sr['referer'], ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars($sr['referrer_short'], ENT_QUOTES, 'UTF-8'); ?></td>
-                                            <td><code><?php echo htmlspecialchars($sr['ip'], ENT_QUOTES, 'UTF-8'); ?></code></td>
                                             <td class="ua-cell" title="<?php echo htmlspecialchars($sr['ua'], ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars($sr['client_hint'], ENT_QUOTES, 'UTF-8'); ?></td>
                                         </tr>
                                     <?php endforeach; ?>
@@ -1770,5 +2042,219 @@ $flashNewLink = (is_array($flash) && isset($flash['new_link'])) ? (string) $flas
         }
     })();
 </script>
+<?php if ($activeTab === 'stats'): ?>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+<script>
+(function () {
+    var wrap = document.querySelector('.stats-table-wrap');
+    if (!wrap || typeof L === 'undefined') return;
+
+    var pop = document.createElement('aside');
+    pop.className = 'stats-ip-popover';
+    pop.setAttribute('aria-live', 'polite');
+    document.body.appendChild(pop);
+
+    var closeTimer = null;
+    var mapInstance = null;
+    var cache = Object.create(null);
+    var activeIp = null;
+    var fetchGen = 0;
+
+    function cancelClose() {
+        if (closeTimer) {
+            clearTimeout(closeTimer);
+            closeTimer = null;
+        }
+    }
+
+    function scheduleClose() {
+        cancelClose();
+        closeTimer = setTimeout(function () {
+            pop.classList.remove('is-visible');
+            activeIp = null;
+            if (mapInstance) {
+                mapInstance.remove();
+                mapInstance = null;
+            }
+        }, 200);
+    }
+
+    function esc(s) {
+        var d = document.createElement('div');
+        d.textContent = s == null ? '' : String(s);
+        return d.innerHTML;
+    }
+
+    function positionPop(clientX, clientY) {
+        var pad = 12;
+        var w = pop.offsetWidth || 360;
+        var h = pop.offsetHeight || 380;
+        var top = clientY + 14;
+        var left = clientX + 16;
+        if (top + h > window.innerHeight - pad) top = Math.max(pad, window.innerHeight - h - pad);
+        if (left + w > window.innerWidth - pad) left = Math.max(pad, window.innerWidth - w - pad);
+        pop.style.top = top + 'px';
+        pop.style.left = left + 'px';
+    }
+
+    function renderLoading(ip) {
+        pop.innerHTML =
+            '<header><div><div class="ip-line">' + esc(ip) + '</div>' +
+            '<div class="acc-line">Loading…</div></div><span class="geo-tag">IP geo</span></header>' +
+            '<div class="stats-ip-map" id="statsLeafletHost"></div>' +
+            '<div class="geo-msg muted">Fetching location…</div>';
+    }
+
+    function renderGeo(data) {
+        var ok = data.ok === true;
+        var hasLL = ok && data.lat != null && data.lng != null && !isNaN(Number(data.lat)) && !isNaN(Number(data.lng));
+        var headAcc = esc(data.accuracy || (data.message || ''));
+        pop.innerHTML =
+            '<header><div><div class="ip-line">' + esc(data.ip) + '</div>' +
+            '<div class="acc-line">' + headAcc + '</div></div><span class="geo-tag">IP geo</span></header>' +
+            '<div class="stats-ip-map" id="statsLeafletHost"></div>' +
+            '<div class="geo-grid">' +
+            '<div><div class="geo-k">City</div><div class="geo-v">' + esc(data.city) + '</div></div>' +
+            '<div><div class="geo-k">Region</div><div class="geo-v">' + esc(data.region) + '</div></div>' +
+            '<div><div class="geo-k">Country</div><div class="geo-v">' + esc(data.country) + '</div></div>' +
+            '<div><div class="geo-k">ISP</div><div class="geo-v">' + esc(data.isp) + '</div></div>' +
+            '<div><div class="geo-k">Latitude</div><div class="geo-v">' + esc(hasLL ? Number(data.lat).toFixed(5) : '—') + '</div></div>' +
+            '<div><div class="geo-k">Longitude</div><div class="geo-v">' + esc(hasLL ? Number(data.lng).toFixed(5) : '—') + '</div></div>' +
+            '</div>';
+
+        var host = document.getElementById('statsLeafletHost');
+        if (!host) return;
+
+        if (!hasLL) {
+            host.style.display = 'none';
+            return;
+        }
+        host.style.display = '';
+
+        var lat = Number(data.lat);
+        var lng = Number(data.lng);
+        if (mapInstance) {
+            mapInstance.remove();
+            mapInstance = null;
+        }
+        mapInstance = L.map(host, {
+            zoomControl: false,
+            attributionControl: false,
+            dragging: true,
+            scrollWheelZoom: false,
+            doubleClickZoom: false,
+            boxZoom: false,
+            keyboard: false
+        }).setView([lat, lng], 7);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(mapInstance);
+        L.circleMarker([lat, lng], {
+            radius: 8,
+            weight: 3,
+            color: '#1d4ed8',
+            fillColor: '#3b82f6',
+            fillOpacity: 0.85
+        }).addTo(mapInstance);
+        setTimeout(function () {
+            if (mapInstance) mapInstance.invalidateSize();
+        }, 60);
+    }
+
+    function loadIp(ip, clientX, clientY) {
+        var gen = ++fetchGen;
+        activeIp = ip;
+
+        if (cache[ip]) {
+            renderGeo(cache[ip]);
+            pop.classList.add('is-visible');
+            positionPop(clientX, clientY);
+            setTimeout(function () {
+                if (mapInstance) mapInstance.invalidateSize();
+            }, 80);
+            return;
+        }
+
+        renderLoading(ip);
+        pop.classList.add('is-visible');
+        positionPop(clientX, clientY);
+
+        var u = new URL(window.location.href);
+        u.searchParams.set('tab', 'stats');
+        u.searchParams.set('geo_ip', ip);
+
+        fetch(u.toString(), {
+            credentials: 'same-origin',
+            headers: { Accept: 'application/json' }
+        })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (gen !== fetchGen) return;
+                cache[ip] = data;
+                renderGeo(data);
+                positionPop(clientX, clientY);
+                setTimeout(function () {
+                    if (mapInstance) mapInstance.invalidateSize();
+                }, 80);
+            })
+            .catch(function () {
+                if (gen !== fetchGen) return;
+                renderGeo({
+                    ok: false,
+                    ip: ip,
+                    lat: null,
+                    lng: null,
+                    city: '',
+                    region: '',
+                    country: '',
+                    isp: '',
+                    accuracy: '',
+                    message: 'Could not load geo data'
+                });
+                positionPop(clientX, clientY);
+            });
+    }
+
+    pop.addEventListener('mouseenter', cancelClose);
+    pop.addEventListener('mouseleave', scheduleClose);
+
+    wrap.addEventListener('mouseover', function (e) {
+        var t = e.target && e.target.closest ? e.target.closest('.stats-ip-trigger') : null;
+        if (!t || !wrap.contains(t)) return;
+        var ip = t.getAttribute('data-ip');
+        if (!ip) return;
+        cancelClose();
+        loadIp(ip, e.clientX, e.clientY);
+    });
+
+    wrap.addEventListener('mousemove', function (e) {
+        if (!pop.classList.contains('is-visible')) return;
+        positionPop(e.clientX, e.clientY);
+    });
+
+    wrap.addEventListener('mouseout', function (e) {
+        var t = e.target && e.target.closest ? e.target.closest('.stats-ip-trigger') : null;
+        if (!t || !wrap.contains(t)) return;
+        var rel = e.relatedTarget;
+        if (rel && (t.contains(rel) || pop.contains(rel))) return;
+        scheduleClose();
+    });
+
+    wrap.addEventListener('focusin', function (e) {
+        var t = e.target && e.target.closest ? e.target.closest('.stats-ip-trigger') : null;
+        if (!t || !wrap.contains(t)) return;
+        var ip = t.getAttribute('data-ip');
+        if (!ip) return;
+        cancelClose();
+        var r = t.getBoundingClientRect();
+        loadIp(ip, r.left, r.bottom);
+    });
+
+    wrap.addEventListener('focusout', function (e) {
+        var t = e.target && e.target.closest ? e.target.closest('.stats-ip-trigger') : null;
+        if (!t) return;
+        scheduleClose();
+    });
+})();
+</script>
+<?php endif; ?>
 </body>
 </html>

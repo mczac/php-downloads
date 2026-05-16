@@ -48,6 +48,10 @@ if (isset($_GET['password']) && (string) $_GET['password'] !== '') {
 }
 
 if ($fileParam === '' || $passwordParam === '') {
+    // Bare "/" visits (prefetch, bots): do not append to monthly download logs.
+    if ($fileParam === '' && $passwordParam === '') {
+        downloads_gate_render_exit(403, 'unauthorized');
+    }
     downloads_log('downloads', 'bad_request|missing_params|file=' . $fileParam);
     downloads_gate_render_exit(403, 'unauthorized');
 }

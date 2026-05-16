@@ -246,3 +246,199 @@ function downloads_stats_row_enrich(array $row): array
 
     return $row;
 }
+
+/**
+ * Cached ipwho.is fetch for map coordinates (Statistics hover popover).
+ *
+ * @return array<string, mixed>|null Decoded JSON or null on failure
+ */
+function downloads_geo_ipwho_fetch_json(string $ip): ?array
+{
+    $url = 'https://ipwho.is/' . rawurlencode($ip);
+    $ctx = stream_context_create([
+        'http' => [
+            'timeout' => 5,
+            'ignore_errors' => true,
+            'header' => "Accept: application/json\r\n",
+        ],
+    ]);
+    $body = @file_get_contents($url, false, $ctx);
+    if ($body === false || $body === '') {
+        return null;
+    }
+
+    $j = json_decode($body, true);
+
+    return is_array($j) ? $j : null;
+}
+
+/**
+ * Admin Statistics: approximate lat/lng + locality fields for IP map popover.
+ *
+ * @return array{
+ *   ok: bool,
+ *   ip: string,
+ *   lat: float|null,
+ *   lng: float|null,
+ *   city: string,
+ *   region: string,
+ *   country: string,
+ *   isp: string,
+ *   accuracy: string,
+ *   message?: string
+ * }
+ */
+function downloads_geo_ip_detail_for_map(string $ip): array
+{
+    $empty = static fn(): array => [
+        'city' => '',
+        'region' => '',
+        'country' => '',
+        'isp' => '',
+    ];
+
+    if ($ip === '' || !filter_var($ip, FILTER_VALIDATE_IP)) {
+        return [
+            'ok' => false,
+            'ip' => $ip,
+            'lat' => null,
+            'lng' => null,
+            ...$empty(),
+            'accuracy' => '',
+            'message' => 'Invalid IP address',
+        ];
+    }
+
+    if (!downloads_ip_is_public_routable($ip)) {
+        return [
+            'ok' => true,
+            'ip' => $ip,
+            'lat' => null,
+            'lng' => null,
+            ...$empty(),
+            'accuracy' => 'Private or reserved range',
+        ];
+    }
+
+    $cfg = $GLOBALS['DOWNLOADS_BOOTSTRAP'] ?? [];
+    $logDir = isset($cfg['log_dir']) ? rtrim((string) $cfg['log_dir'], '/') : '';
+    if ($logDir === '' || !is_dir($logDir)) {
+        return [
+            'ok' => false,
+            'ip' => $ip,
+            'lat' => null,
+            'lng' => null,
+            ...$empty(),
+            'accuracy' => '',
+            'message' => 'log_dir not configured',
+        ];
+    }
+
+    if (!array_key_exists('geoip_allow_online_lookup', $cfg)) {
+        $allowOnline = true;
+    } else {
+        $allowOnline = filter_var($cfg['geoip_allow_online_lookup'], FILTER_VALIDATE_BOOLEAN);
+    }
+
+    if (!$allowOnline) {
+        return [
+            'ok' => true,
+            'ip' => $ip,
+            'lat' => null,
+            'lng' => null,
+            ...$empty(),
+            'accuracy' => 'Coordinates unavailable (online lookup disabled in bootstrap)',
+        ];
+    }
+
+    $cacheDir = $logDir . '/.geo_cache';
+    if (!is_dir($cacheDir)) {
+        @mkdir($cacheDir, 0750, true);
+    }
+    if (!is_dir($cacheDir) || !is_writable($cacheDir)) {
+        return [
+            'ok' => false,
+            'ip' => $ip,
+            'lat' => null,
+            'lng' => null,
+            ...$empty(),
+            'accuracy' => '',
+            'message' => 'Geo cache directory not writable',
+        ];
+    }
+
+    $cacheFile = $cacheDir . '/map_' . hash('sha256', $ip) . '.json';
+    $ttl = 86400 * 30;
+
+    if (is_readable($cacheFile)) {
+        $raw = @file_get_contents($cacheFile);
+        if ($raw !== false) {
+            $wrap = json_decode($raw, true);
+            if (
+                is_array($wrap)
+                && isset($wrap['ts'], $wrap['detail'])
+                && is_array($wrap['detail'])
+                && is_numeric($wrap['ts'])
+                && (time() - (int) $wrap['ts']) < $ttl
+            ) {
+                $d = $wrap['detail'];
+                $d['ip'] = $ip;
+
+                return $d;
+            }
+        }
+    }
+
+    $j = downloads_geo_ipwho_fetch_json($ip);
+    if ($j === null || empty($j['success'])) {
+        $detail = [
+            'ok' => false,
+            'ip' => $ip,
+            'lat' => null,
+            'lng' => null,
+            ...$empty(),
+            'accuracy' => '',
+            'message' => isset($j['message']) && is_string($j['message']) ? $j['message'] : 'Lookup failed',
+        ];
+    } else {
+        $lat = null;
+        $lng = null;
+        if (isset($j['latitude'], $j['longitude']) && is_numeric($j['latitude']) && is_numeric($j['longitude'])) {
+            $lat = (float) $j['latitude'];
+            $lng = (float) $j['longitude'];
+        }
+        $conn = isset($j['connection']) && is_array($j['connection']) ? $j['connection'] : [];
+        $isp = '';
+        if (isset($conn['isp']) && is_string($conn['isp'])) {
+            $isp = trim($conn['isp']);
+        }
+        if ($isp === '' && isset($conn['org']) && is_string($conn['org'])) {
+            $isp = trim($conn['org']);
+        }
+
+        $city = isset($j['city']) && is_string($j['city']) ? trim($j['city']) : '';
+        $region = isset($j['region']) && is_string($j['region']) ? trim($j['region']) : '';
+        $country = isset($j['country']) && is_string($j['country']) ? trim($j['country']) : '';
+
+        $detail = [
+            'ok' => true,
+            'ip' => $ip,
+            'lat' => $lat,
+            'lng' => $lng,
+            'city' => $city,
+            'region' => $region,
+            'country' => $country,
+            'isp' => $isp,
+            'accuracy' => $lat !== null && $lng !== null
+                ? 'Approximate location (ipwho.is)'
+                : 'No coordinates in response',
+        ];
+    }
+
+    $enc = json_encode(['ts' => time(), 'detail' => $detail]);
+    if ($enc !== false) {
+        @file_put_contents($cacheFile, $enc, LOCK_EX);
+    }
+
+    return $detail;
+}
