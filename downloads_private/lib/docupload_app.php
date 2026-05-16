@@ -535,9 +535,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $registry[$storedBase]['password_rotated_at'] = gmdate('c');
                 try {
                     save_registry($registry);
-                    $link = private_download_script_url()
-                        . '?file=' . rawurlencode($storedBase)
-                        . '&password=' . rawurlencode($passwordHex);
+                    $link = public_download_link($storedBase, $passwordHex);
                     $_SESSION['docupload_flash'] = [
                         'new_link' => $link,
                     ];
@@ -712,10 +710,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             doc_redirect();
         }
 
-        $link = private_download_script_url()
-            . '?file=' . rawurlencode($storedBase)
-            . '&password=' . rawurlencode($passwordHex);
+        $link = public_download_link($storedBase, $passwordHex);
         $untilLabel = format_until_label($expiresAt);
+
+        doc_batch_append([
+            'stored' => $storedBase,
+            'nice' => $displayName,
+            'link' => $link,
+            'until' => $untilLabel,
+            'expires_iso' => $expiresAt,
+        ]);
 
         if (wants_json_response()) {
             respond_json(true, 'Uploaded', [
@@ -727,14 +731,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ]);
             exit;
         }
-
-        doc_batch_append([
-            'stored' => $storedBase,
-            'nice' => $displayName,
-            'link' => $link,
-            'until' => $untilLabel,
-            'expires_iso' => $expiresAt,
-        ]);
 
         $_SESSION['docupload_flash'] = ['uploaded' => $displayName];
         doc_redirect();
@@ -894,15 +890,25 @@ $flashNewLink = (is_array($flash) && isset($flash['new_link'])) ? (string) $flas
     <title><?php echo htmlspecialchars($pageTitle, ENT_QUOTES, 'UTF-8'); ?></title>
     <style>
         :root {
-            --bg: #fafafa;
+            --bg: #f7f6fb;
             --card: #ffffff;
-            --border: #e4e4e7;
-            --text: #18181b;
-            --muted: #71717a;
-            --accent: #2563eb;
+            --border: #e6e3ee;
+            --text: #15131f;
+            --muted: #6b6880;
+            --accent: #7c3aed;
+            --accent-2: #c026d3;
             --danger: #b91c1c;
             --warn-bg: #fffbeb;
             --warn-border: #fcd34d;
+            --success: #16a34a;
+            --portal-secondary: #efedf6;
+            --gradient-brand: linear-gradient(135deg, #7c3aed, #c026d3);
+            --gradient-mesh:
+                radial-gradient(at 18% 12%, rgba(192, 38, 211, 0.14) 0, transparent 52%),
+                radial-gradient(at 88% 4%, rgba(124, 58, 237, 0.14) 0, transparent 48%),
+                radial-gradient(at 4% 92%, rgba(45, 191, 247, 0.12) 0, transparent 50%);
+            --shadow-portal: 0 10px 40px -15px rgba(21, 19, 31, 0.12);
+            --shadow-portal-glow: 0 20px 60px -22px rgba(124, 58, 237, 0.35);
         }
         @media (prefers-color-scheme: dark) {
             :root {
@@ -911,12 +917,21 @@ $flashNewLink = (is_array($flash) && isset($flash['new_link'])) ? (string) $flas
                 --border: #27272a;
                 --text: #fafafa;
                 --muted: #a1a1aa;
+                --accent: #a78bfa;
+                --accent-2: #e879f9;
                 --warn-bg: #422006;
                 --warn-border: #ca8a04;
+                --portal-secondary: #27272a;
+                --gradient-brand: linear-gradient(135deg, #8b5cf6, #d946ef);
+                --gradient-mesh:
+                    radial-gradient(at 20% 10%, rgba(167, 139, 250, 0.12) 0, transparent 50%),
+                    radial-gradient(at 80% 0%, rgba(217, 70, 239, 0.1) 0, transparent 50%);
+                --shadow-portal: 0 12px 40px -12px rgba(0, 0, 0, 0.45);
+                --shadow-portal-glow: 0 20px 50px -20px rgba(139, 92, 246, 0.25);
             }
         }
         * { box-sizing: border-box; }
-        body { font-family: system-ui, -apple-system, Segoe UI, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 1.25rem 1rem 3rem; line-height: 1.45; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif; background: var(--bg) var(--gradient-mesh) fixed; background-repeat: no-repeat; background-size: cover; color: var(--text); margin: 0; padding: 1.25rem 1rem 3rem; line-height: 1.45; -webkit-font-smoothing: antialiased; }
         .wrap { max-width: 1100px; margin: 0 auto; }
         header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0.75rem; margin-bottom: 1.25rem; }
         header h1 { font-size: 1.35rem; margin: 0; font-weight: 650; }
@@ -950,8 +965,121 @@ $flashNewLink = (is_array($flash) && isset($flash['new_link'])) ? (string) $flas
             border: 1px solid var(--border);
             border-radius: 14px;
             padding: 1.15rem 1.25rem;
+            box-shadow: var(--shadow-portal);
         }
         .card h2 { font-size: 1rem; margin: 0 0 0.75rem; font-weight: 650; }
+        .upload-card-modern { padding: 1.35rem 1.35rem 1.5rem; border-radius: 1.25rem; }
+        .upload-hero { text-align: center; display: flex; flex-direction: column; gap: 0.65rem; align-items: center; margin-bottom: 1.25rem; }
+        .upload-badge {
+            display: inline-flex; align-items: center; gap: 0.45rem;
+            padding: 0.28rem 0.75rem; border-radius: 999px;
+            background: color-mix(in srgb, var(--card) 88%, transparent); backdrop-filter: blur(8px);
+            border: 1px solid var(--border); font-size: 0.72rem; color: var(--muted); font-weight: 600;
+        }
+        .upload-badge svg { color: var(--accent); flex-shrink: 0; }
+        .upload-hero h2.upload-title { font-size: clamp(1.35rem, 3.5vw, 1.85rem); margin: 0; font-weight: 600; letter-spacing: -0.02em; border: none; }
+        .upload-title .grad {
+            background: var(--gradient-brand);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+        }
+        .upload-hero .upload-sub { color: var(--muted); margin: 0; font-size: 0.88rem; max-width: 28rem; }
+        .dz-dropzone {
+            position: relative; cursor: pointer; text-align: center;
+            border: 2px dashed var(--border); border-radius: 1.35rem;
+            padding: 2.75rem 1.25rem;
+            background: color-mix(in srgb, var(--card) 92%, transparent);
+            backdrop-filter: blur(8px);
+            transition: border-color 0.25s ease, box-shadow 0.25s ease, transform 0.25s ease;
+        }
+        .dz-dropzone:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+        .dz-dropzone.dragging {
+            border-color: var(--accent);
+            transform: scale(1.008);
+            box-shadow: var(--shadow-portal-glow);
+        }
+        .dz-dropzone:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+        .dz-icon-wrap {
+            width: 72px; height: 72px; margin: 0 auto 1rem;
+            display: grid; place-items: center; border-radius: 1.1rem;
+            background: var(--portal-secondary); color: var(--text);
+            transition: background 0.25s ease, color 0.25s ease, transform 0.25s ease;
+        }
+        .dz-dropzone:hover .dz-icon-wrap,
+        .dz-dropzone.dragging .dz-icon-wrap {
+            background: var(--gradient-brand); color: #fff;
+        }
+        .dz-dropzone.dragging .dz-icon-wrap { transform: rotate(-5deg) scale(1.06); }
+        .dz-icon-wrap .dz-ic { display: none; }
+        .dz-icon-wrap .dz-ic.active { display: block; }
+        .dz-title { font-size: 1rem; font-weight: 600; margin: 0 0 0.2rem; }
+        .dz-sub { font-size: 0.82rem; color: var(--muted); margin: 0 0 1rem; }
+        .upload-options {
+            display: grid;
+            gap: 0.85rem;
+            margin-top: 1.15rem;
+            padding-top: 1.15rem;
+            border-top: 1px solid var(--border);
+        }
+        .upload-options-grid {
+            display: grid;
+            gap: 0.85rem;
+            grid-template-columns: 1fr;
+        }
+        @media (min-width: 520px) {
+            .upload-options-grid { grid-template-columns: 1fr 1fr; align-items: end; }
+        }
+        .dz-panel {
+            margin-top: 1rem;
+            border: 1px solid var(--border);
+            border-radius: 1.25rem;
+            overflow: hidden;
+            background: color-mix(in srgb, var(--card) 95%, transparent);
+        }
+        .dz-panel[hidden] { display: none !important; }
+        .dz-panel-head {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 0.85rem 1.1rem; border-bottom: 1px solid var(--border); gap: 0.75rem;
+        }
+        .dz-panel-head h3 { margin: 0; font-size: 0.92rem; font-weight: 600; }
+        .dz-panel-head .dz-meta { font-size: 0.72rem; color: var(--muted); margin-top: 0.15rem; }
+        .dz-clear {
+            background: none; border: none; color: var(--muted); cursor: pointer;
+            font-size: 0.75rem; font-weight: 500;
+        }
+        .dz-clear:hover { color: var(--text); }
+        ul.dz-items { list-style: none; margin: 0; padding: 0; max-height: 280px; overflow-y: auto; }
+        ul.dz-items li {
+            display: flex; align-items: center; gap: 0.85rem;
+            padding: 0.85rem 1.1rem; border-top: 1px solid var(--border);
+        }
+        ul.dz-items li:first-child { border-top: none; }
+        .dz-file-ic {
+            width: 38px; height: 38px; flex-shrink: 0;
+            border-radius: 0.65rem; display: grid; place-items: center;
+            background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent);
+        }
+        .dz-file-ic.done { background: color-mix(in srgb, var(--success) 18%, transparent); color: var(--success); }
+        .dz-file-ic.err { background: color-mix(in srgb, var(--danger) 15%, transparent); color: var(--danger); }
+        .dz-file-main { flex: 1; min-width: 0; }
+        .dz-file-row { display: flex; justify-content: space-between; gap: 0.65rem; align-items: center; }
+        .dz-file-name { font-size: 0.82rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .dz-file-pct { font-size: 0.72rem; color: var(--muted); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+        .dz-bar { height: 5px; background: var(--portal-secondary); border-radius: 999px; margin-top: 0.45rem; overflow: hidden; }
+        .dz-bar > div {
+            height: 100%; background: var(--gradient-brand); width: 0%; transition: width 0.2s ease;
+            border-radius: 999px;
+        }
+        .dz-bar > div.done { background: var(--success); }
+        .dz-bar > div.err { background: #dc2626; }
+        .dz-remove {
+            width: 30px; height: 30px; display: grid; place-items: center;
+            border-radius: 0.45rem; background: none; border: none; color: var(--muted);
+            cursor: pointer; flex-shrink: 0;
+        }
+        .dz-remove:hover { background: var(--portal-secondary); color: var(--text); }
+        .dz-remove:disabled { opacity: 0.35; cursor: not-allowed; }
         .upload-form .field { margin-bottom: 1rem; }
         label { display: block; font-size: 0.82rem; font-weight: 600; margin-bottom: 0.35rem; color: var(--muted); }
         input[type="text"], input[type="number"], input[type="file"] {
@@ -1088,34 +1216,67 @@ $flashNewLink = (is_array($flash) && isset($flash['new_link'])) ? (string) $flas
 
         <?php if ($activeTab === 'portal'): ?>
         <div class="stack-portal">
-            <div class="card">
-                <h2>Upload</h2>
-                <p class="muted" style="margin:0 0 1rem;">Files you upload are queued below for email export.</p>
-                <form class="upload-form" method="post" action="" enctype="multipart/form-data">
-                    <input type="hidden" name="csrf" value="<?php echo htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8'); ?>">
-                    <input type="hidden" name="action" value="upload">
-                    <input type="hidden" name="return_tab" value="portal">
-                    <div class="field">
-                        <label for="nice_name">Display name (optional)</label>
-                        <input id="nice_name" name="nice_name" type="text" placeholder="Uses file name if empty" autocomplete="off">
+            <div class="card upload-card-modern" id="portal-upload-root"
+                data-csrf="<?php echo htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8'); ?>"
+                data-max-expiry="<?php echo (string) (int) $maxExp; ?>"
+                data-default-expiry="<?php echo (string) (int) $defExp; ?>">
+                <div class="upload-hero">
+                    <span class="upload-badge">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.9 5.8L20 11l-5.8 1.9L12 19l-1.9-5.8L4 11l5.8-1.9L12 3z"/></svg>
+                        Drop · upload · queue
+                    </span>
+                    <h2 class="upload-title">Send files, <span class="grad">beautifully</span></h2>
+                    <p class="upload-sub">Drag files here or click to browse. Files are uploaded one after another and added to your session queue for email export<?php
+                    $iniMax = ini_get('upload_max_filesize');
+                    if (is_string($iniMax) && $iniMax !== ''): ?> · PHP upload limit <code><?php echo htmlspecialchars($iniMax, ENT_QUOTES, 'UTF-8'); ?></code><?php endif; ?>.</p>
+                </div>
+
+                <div id="uploadDropzone" class="dz-dropzone" tabindex="0" role="button" aria-describedby="dzTitle dz-sub">
+                    <input type="file" id="uploadFileInput" multiple hidden>
+                    <div class="dz-icon-wrap" aria-hidden="true">
+                        <svg class="dz-ic active" id="dzIcUpload" width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                        <svg class="dz-ic" id="dzIcDrop" width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><polyline points="9 15 11 17 15 13"/></svg>
                     </div>
-                    <div class="field">
-                        <label for="file">File</label>
-                        <input id="file" name="file" type="file" required>
+                    <p class="dz-title" id="dzTitle">Drop files here or click to browse</p>
+                    <p class="dz-sub" id="dz-sub">Supports the same file types your server allows.</p>
+
+                    <div class="upload-options" id="uploadOptions">
+                        <div class="upload-options-grid">
+                            <div class="field" style="margin-bottom:0;">
+                                <label for="nice_name">Display name (optional)</label>
+                                <input id="nice_name" type="text" placeholder="Uses each file’s name if empty" autocomplete="off">
+                            </div>
+                            <div class="field" style="margin-bottom:0;">
+                                <label for="expiry_days">Link expires in (days)</label>
+                                <input id="expiry_days" type="number" min="1" max="<?php echo (string) $maxExp; ?>" value="<?php echo (string) $defExp; ?>">
+                            </div>
+                        </div>
+                        <div class="field row-check" style="margin-bottom:0;">
+                            <label for="no_expiry"><input id="no_expiry" type="checkbox" value="1"> No expiry</label>
+                        </div>
                     </div>
-                    <div class="field">
-                        <label for="expiry_days">Link expires in (days)</label>
-                        <input id="expiry_days" name="expiry_days" type="number" min="1" max="<?php echo (string) $maxExp; ?>" value="<?php echo (string) $defExp; ?>">
+                </div>
+
+                <div id="uploadQueuePanel" class="dz-panel" hidden>
+                    <div class="dz-panel-head">
+                        <div>
+                            <h3>Upload queue</h3>
+                            <div class="dz-meta" id="dzMeta">0 complete</div>
+                        </div>
+                        <button type="button" class="dz-clear" id="dzClearBtn">Clear queue</button>
                     </div>
-                    <div class="field row-check">
-                        <label for="no_expiry"><input id="no_expiry" type="checkbox" name="no_expiry" value="1"> No expiry</label>
-                    </div>
-                    <button type="submit" class="upload-submit">Upload</button>
-                </form>
+                    <ul class="dz-items" id="dzItems"></ul>
+                </div>
+                <p id="uploadGlobalErr" role="alert" style="display:none;margin:0.85rem 0 0;font-size:0.85rem;color:var(--danger);font-weight:500;"></p>
             </div>
 
-            <div class="card session-export-card">
-                <h2>Session queue</h2>
+            <div class="card session-export-card queue-panel-modern">
+                <div class="dz-panel-head" style="border-bottom:1px solid var(--border);margin:-1.15rem -1.25rem 1rem;padding:0.85rem 1.25rem;">
+                    <div>
+                        <h2 style="margin:0;font-size:1rem;font-weight:650;">Session queue</h2>
+                        <div class="dz-meta">Links ready for email</div>
+                    </div>
+                </div>
                 <?php if ($batch === []): ?>
                     <p class="muted">Nothing queued yet.</p>
                 <?php else: ?>
@@ -1382,6 +1543,232 @@ $flashNewLink = (is_array($flash) && isset($flash['new_link'])) ? (string) $flas
             setTimeout(function () { btnP.textContent = 'Copy plain text'; }, 1800);
         });
     })();
-    </script>
+
+    (function () {
+        var root = document.getElementById('portal-upload-root');
+        if (!root) return;
+
+        var csrf = root.getAttribute('data-csrf') || '';
+        var maxExp = parseInt(root.getAttribute('data-max-expiry') || '365', 10);
+        var dz = document.getElementById('uploadDropzone');
+        var input = document.getElementById('uploadFileInput');
+        var listEl = document.getElementById('dzItems');
+        var panel = document.getElementById('uploadQueuePanel');
+        var meta = document.getElementById('dzMeta');
+        var dzTitle = document.getElementById('dzTitle');
+        var icUp = document.getElementById('dzIcUpload');
+        var icDrop = document.getElementById('dzIcDrop');
+        var clearBtn = document.getElementById('dzClearBtn');
+        var globalErr = document.getElementById('uploadGlobalErr');
+        var opts = document.getElementById('uploadOptions');
+        var noExp = document.getElementById('no_expiry');
+        var expInput = document.getElementById('expiry_days');
+
+        var items = [];
+        var pipelineActive = false;
+        var batchHadSuccess = false;
+
+        function uuid() {
+            if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+            return 'u-' + Date.now() + '-' + Math.random().toString(36).slice(2, 11);
+        }
+
+        function fmtBytes(b) {
+            if (b < 1024) return b + ' B';
+            if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
+            return (b / 1048576).toFixed(2) + ' MB';
+        }
+
+        function setDragging(on) {
+            dz.classList.toggle('dragging', on);
+            dzTitle.textContent = on ? 'Release to add files' : 'Drop files here or click to browse';
+            icUp.classList.toggle('active', !on);
+            icDrop.classList.toggle('active', on);
+        }
+
+        function showGlobalErr(msg) {
+            if (!globalErr) return;
+            if (!msg) {
+                globalErr.style.display = 'none';
+                globalErr.textContent = '';
+                return;
+            }
+            globalErr.style.display = 'block';
+            globalErr.textContent = msg;
+        }
+
+        function render() {
+            panel.hidden = items.length === 0;
+            var up = items.filter(function (i) { return i.status === 'uploading'; }).length;
+            var done = items.filter(function (i) { return i.status === 'done'; }).length;
+            var err = items.filter(function (i) { return i.status === 'error'; }).length;
+            var q = items.filter(function (i) { return i.status === 'queued'; }).length;
+            if (meta) {
+                meta.textContent = up ? (up + ' uploading · ' + done + ' done' + (err ? ' · ' + err + ' failed' : ''))
+                    : (done + ' done' + (err ? ' · ' + err + ' failed' : '') + (q ? ' · ' + q + ' waiting' : ''));
+            }
+            var uploadingNow = items.some(function (i) { return i.status === 'uploading'; });
+            clearBtn.disabled = uploadingNow;
+            listEl.innerHTML = items.map(function (i) {
+                var iclass = 'dz-file-ic';
+                if (i.status === 'done') iclass += ' done';
+                else if (i.status === 'error') iclass += ' err';
+                var icon = i.status === 'done'
+                    ? '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="9 12 12 15 16 10"/></svg>'
+                    : (i.status === 'error'
+                        ? '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>'
+                        : '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>');
+                var pct = i.status === 'done' ? fmtBytes(i.file.size)
+                    : (i.status === 'error' ? (i.errorMsg || 'Failed') : Math.floor(i.progress) + '%');
+                var barClass = i.status === 'done' ? 'done' : (i.status === 'error' ? 'err' : '');
+                var rmDisabled = i.status === 'uploading' ? ' disabled' : '';
+                return '<li data-id="' + i.id + '">' +
+                    '<div class="' + iclass + '">' + icon + '</div>' +
+                    '<div class="dz-file-main">' +
+                    '<div class="dz-file-row"><span class="dz-file-name">' + escapeHtml(i.file.name) + '</span>' +
+                    '<span class="dz-file-pct">' + escapeHtml(String(pct)) + '</span></div>' +
+                    '<div class="dz-bar"><div class="' + barClass + '" style="width:' + (i.status === 'error' ? '100%' : i.progress + '%') + '"></div></div>' +
+                    '</div>' +
+                    '<button type="button" class="dz-remove" data-remove="' + i.id + '" aria-label="Remove"' + rmDisabled + '>' +
+                    '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></li>';
+            }).join('');
+        }
+
+        function escapeHtml(s) {
+            var d = document.createElement('div');
+            d.textContent = s;
+            return d.innerHTML;
+        }
+
+        function syncNoExpiry() {
+            if (!noExp || !expInput) return;
+            expInput.disabled = noExp.checked;
+        }
+
+        noExp.addEventListener('change', syncNoExpiry);
+        syncNoExpiry();
+
+        if (opts) {
+            opts.addEventListener('click', function (e) { e.stopPropagation(); });
+        }
+
+        dz.addEventListener('click', function () { input.click(); });
+        dz.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                input.click();
+            }
+        });
+        dz.addEventListener('dragover', function (e) { e.preventDefault(); setDragging(true); });
+        dz.addEventListener('dragleave', function (e) { if (e.target === dz) setDragging(false); });
+        dz.addEventListener('drop', function (e) {
+            e.preventDefault();
+            setDragging(false);
+            if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
+        });
+        input.addEventListener('change', function () {
+            if (input.files.length) addFiles(input.files);
+            input.value = '';
+        });
+
+        listEl.addEventListener('click', function (e) {
+            var btn = e.target.closest('[data-remove]');
+            if (!btn || btn.disabled) return;
+            var id = btn.getAttribute('data-remove');
+            items = items.filter(function (i) { return !(i.id === id && i.status === 'queued'); });
+            render();
+        });
+
+        clearBtn.addEventListener('click', function () {
+            if (items.some(function (i) { return i.status === 'uploading'; })) return;
+            items = items.filter(function (i) { return i.status === 'uploading'; });
+            render();
+        });
+
+        function addFiles(fileList) {
+            showGlobalErr('');
+            var arr = Array.prototype.slice.call(fileList);
+            var single = arr.length === 1;
+            arr.forEach(function (file) {
+                items.push({ id: uuid(), file: file, progress: 0, status: 'queued', useNiceName: single, errorMsg: '' });
+            });
+            render();
+            if (!pipelineActive) runNext();
+        }
+
+        function runNext() {
+            var next = items.find(function (i) { return i.status === 'queued'; });
+            if (!next) {
+                pipelineActive = false;
+                if (batchHadSuccess) window.location.reload();
+                return;
+            }
+            pipelineActive = true;
+            uploadOne(next).then(function (ok) {
+                if (ok) batchHadSuccess = true;
+                runNext();
+            });
+        }
+
+        function uploadOne(item) {
+            return new Promise(function (resolve) {
+                var xhr = new XMLHttpRequest();
+                item.status = 'uploading';
+                item.progress = 0;
+                render();
+
+                xhr.open('POST', window.location.pathname + '?tab=portal');
+                xhr.setRequestHeader('Accept', 'application/json');
+
+                xhr.upload.onprogress = function (e) {
+                    if (e.lengthComputable) {
+                        item.progress = Math.round(e.loaded / e.total * 100);
+                        render();
+                    }
+                };
+
+                xhr.onload = function () {
+                    var ok = false;
+                    try {
+                        var data = JSON.parse(xhr.responseText);
+                        ok = data.ok === true;
+                        if (!ok) item.errorMsg = data.message || ('HTTP ' + xhr.status);
+                    } catch (ex) {
+                        item.errorMsg = xhr.status ? ('HTTP ' + xhr.status) : 'Invalid response';
+                    }
+                    item.status = ok ? 'done' : 'error';
+                    item.progress = ok ? 100 : item.progress;
+                    render();
+                    resolve(ok);
+                };
+
+                xhr.onerror = function () {
+                    item.status = 'error';
+                    item.errorMsg = 'Network error';
+                    item.progress = 0;
+                    render();
+                    resolve(false);
+                };
+
+                var nn = document.getElementById('nice_name');
+                var niceVal = (item.useNiceName && nn) ? nn.value.trim() : '';
+
+                var fd = new FormData();
+                fd.append('csrf', csrf);
+                fd.append('action', 'upload');
+                fd.append('return_tab', 'portal');
+                fd.append('nice_name', niceVal);
+                var expDays = expInput ? parseInt(expInput.value, 10) : maxExp;
+                if (isNaN(expDays) || expDays < 1) expDays = 1;
+                if (expDays > maxExp) expDays = maxExp;
+                fd.append('expiry_days', String(expDays));
+                if (noExp && noExp.checked) fd.append('no_expiry', '1');
+                fd.append('file', item.file, item.file.name);
+
+                xhr.send(fd);
+            });
+        }
+    })();
+</script>
 </body>
 </html>

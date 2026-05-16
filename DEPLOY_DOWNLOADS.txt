@@ -11,9 +11,9 @@ A) Private app (NO HTTP URL) — deploy entire folder to:
    - Registry file path in bootstrap (e.g. .registry.json) — parent folder must exist
 
 B) Public site — document root for download.sumbaprop.com:
-   Deploy contents of download_site/ here (file.php + admin/ including admin/docupload.php and admin/index.php).
+   Deploy contents of download_site/ here (index.php at site root + admin/ including admin/docupload.php and admin/index.php).
 
-   In BOTH file.php and admin/docupload.php, set:
+   In BOTH index.php and admin/docupload.php, set:
    define('DOWNLOADS_PRIVATE_ROOT', '/home/sumbap/private_files/downloads');
    (must match (A) exactly)
 
@@ -21,8 +21,11 @@ C) Logs:
    webdisk/peter/downloads/ — monthly files downloads_YYYY-MM.log, php_errors_YYYY-MM.log
 
 D) Generated links:
-   Must use bootstrap public_download_url, e.g.
-   https://download.sumbaprop.com/file.php?file=...&password=...
+   bootstrap public_download_url should be the download host origin (no path), e.g.
+   https://download.sumbaprop.com
+   Generated URLs look like:
+   https://download.sumbaprop.com/?file=...&password=...
+   (Document root serves index.php via DirectoryIndex.)
 
 E) Main domain sumbaprop.com:
    - Point document root to public_html/main (move current site there), OR
@@ -32,14 +35,14 @@ E) Main domain sumbaprop.com:
 Optional prettier URL (password in path) — Apache example (document root = download_site):
 
   RewriteEngine On
-  RewriteRule ^([0-9a-f]{32}\.[a-z0-9]{1,12})/([0-9a-f]{14})$ file.php?file=$1&password=$2 [L,QSA]
+  RewriteRule ^([0-9a-f]{32}\.[a-z0-9]{1,12})/([0-9a-f]{14})$ index.php?file=$1&password=$2 [L,QSA]
 
 Generated links must still match what you set as public_download_url in bootstrap.php.
 
-Blank page on file.php or admin:
-   - Previously init.php ran outside try/catch — upload the latest file.php and admin/docupload.php from the repo.
+Blank page on site root or admin:
+   - Previously init.php ran outside try/catch — upload the latest index.php and admin/docupload.php from the repo.
    - Use full URL: .../admin/docupload.php (deploy admin/index.php to redirect /admin/ → docupload.php).
-   - Set DOWNLOADS_SHOW_SETUP_ERRORS to true in file.php / admin/docupload.php briefly to see the error text.
+   - Set DOWNLOADS_SHOW_SETUP_ERRORS to true in index.php / admin/docupload.php briefly to see the error text.
    - Common causes: wrong DOWNLOADS_PRIVATE_ROOT, missing bootstrap.php, PHP cannot read private_files/downloads.
    - You must copy bootstrap.example.php to bootstrap.php on the server (the .example file is never loaded).
    - Upload the contents of downloads_private/ directly into private_files/downloads (avoid an extra nesting folder).

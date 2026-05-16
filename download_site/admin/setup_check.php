@@ -5,7 +5,7 @@ declare(strict_types=1);
 /**
  * ONE-TIME diagnostic — DELETE THIS FILE after everything works.
  *
- * 1. Set $checkRoot to the SAME path as DOWNLOADS_PRIVATE_ROOT in file.php / admin/docupload.php
+ * 1. Set $checkRoot to the SAME path as DOWNLOADS_PRIVATE_ROOT in index.php / admin/docupload.php
  * 2. Set $secret to a random string and open:
  *    https://download.sumbaprop.com/admin/setup_check.php?key=YOUR_SECRET
  */

@@ -1,6 +1,9 @@
 # Security: never show directory listings at this vhost root
 Options -Indexes
 
+# Serve downloads via index.php at /
+DirectoryIndex index.php
+
 # Normalize /admin → /admin/ using URL-path semantics (mod_rewrite [R] can leak filesystem paths on some hosts)
 <IfModule mod_alias.c>
 RedirectMatch 301 ^/admin$ /admin/

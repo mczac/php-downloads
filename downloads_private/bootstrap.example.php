@@ -21,9 +21,8 @@ return [
     // Logs (download attempts + PHP errors) — your webdisk path
     'log_dir' => '/home/sumbap/webdisk/peter/downloads',
 
-    // Public download URL used when generating links (no trailing slash)
-    // Must match the script name on download.sumbaprop.com (here: file.php).
-    'public_download_url' => 'https://download.sumbaprop.com/file.php',
+    // Public download site origin (no path). Links use /?file=…&password=… → index.php at doc root.
+    'public_download_url' => 'https://download.sumbaprop.com',
 
     // Optional: absolute path to GeoLite2-Country.mmdb (requires `composer install` in this folder).
     // 'geoip_country_mmdb' => '/home/sumbap/private_files/downloads/GeoLite2-Country.mmdb',

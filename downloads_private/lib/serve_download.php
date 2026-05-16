@@ -49,62 +49,41 @@ if (isset($_GET['password']) && (string) $_GET['password'] !== '') {
 
 if ($fileParam === '' || $passwordParam === '') {
     downloads_log('downloads', 'bad_request|missing_params|file=' . $fileParam);
-    http_response_code(400);
-    header('Content-Type: text/plain; charset=UTF-8');
-    echo 'Incorrect Url in Request';
-    exit;
+    downloads_gate_render_exit(403, 'unauthorized');
 }
 
 if (strlen($passwordParam) !== 14) {
     downloads_log('downloads', 'bad_password|wrong_length|file=' . basename($fileParam));
-    http_response_code(403);
-    header('Content-Type: text/plain; charset=UTF-8');
-    echo 'Incorrect Pwd in Request';
-    exit;
+    downloads_gate_render_exit(403, 'unauthorized');
 }
 
 $decoded = xor_hex_with_text_key($passwordParam, XOR_KEY_TEXT);
 if (strlen($decoded) !== 7) {
     downloads_log('downloads', 'bad_password|decode_fail|file=' . basename($fileParam));
-    http_response_code(403);
-    header('Content-Type: text/plain; charset=UTF-8');
-    echo 'Incorrect Pwd in Request';
-    exit;
+    downloads_gate_render_exit(403, 'unauthorized');
 }
 
 $path = resolve_document_path($fileParam);
 if ($path === null || !is_readable($path)) {
     downloads_log('downloads', 'not_found|no_file|file=' . basename($fileParam));
-    http_response_code(404);
-    header('Content-Type: text/plain; charset=UTF-8');
-    echo 'Incorrect Url in Request';
-    exit;
+    downloads_gate_render_exit(403, 'unauthorized');
 }
 
 $registry = load_registry();
 $entry = $registry[basename($fileParam)] ?? null;
 if ($entry === null || !is_array($entry) || !isset($entry['hash'])) {
     downloads_log('downloads', 'not_found|no_registry|file=' . basename($fileParam));
-    http_response_code(404);
-    header('Content-Type: text/plain; charset=UTF-8');
-    echo 'Incorrect Url in Request';
-    exit;
+    downloads_gate_render_exit(403, 'unauthorized');
 }
 
 if (!hash_equals((string) $entry['hash'], secret_material_hash($decoded))) {
     downloads_log('downloads', 'forbidden|hash_mismatch|file=' . basename($fileParam));
-    http_response_code(403);
-    header('Content-Type: text/plain; charset=UTF-8');
-    echo 'Incorrect Pwd in Request';
-    exit;
+    downloads_gate_render_exit(403, 'unauthorized');
 }
 
 if (registry_entry_is_expired($entry)) {
     downloads_log('downloads', 'gone|expired|file=' . basename($fileParam));
-    http_response_code(410);
-    header('Content-Type: text/plain; charset=UTF-8');
-    echo 'This download link has expired.';
-    exit;
+    downloads_gate_render_exit(410, 'expired');
 }
 
 $original = registry_entry_display_name($entry);
@@ -115,19 +94,13 @@ if ($original === '') {
 $size = filesize($path);
 if ($size === false) {
     downloads_log('downloads', 'error|no_size|file=' . basename($fileParam));
-    http_response_code(500);
-    header('Content-Type: text/plain; charset=UTF-8');
-    echo 'Could not read file size';
-    exit;
+    downloads_gate_render_exit(503, 'unavailable');
 }
 
 $stream = @fopen($path, 'rb');
 if ($stream === false) {
     downloads_log('downloads', 'error|open_fail|file=' . basename($fileParam));
-    http_response_code(500);
-    header('Content-Type: text/plain; charset=UTF-8');
-    echo 'Could not open file for reading';
-    exit;
+    downloads_gate_render_exit(503, 'unavailable');
 }
 
 downloads_log('downloads', 'ok|' . basename($fileParam) . '|as|' . $original);

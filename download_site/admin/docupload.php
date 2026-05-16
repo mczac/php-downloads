@@ -5,7 +5,7 @@ declare(strict_types=1);
 /**
  * Alternate admin URL — same code as index.php.
  *
- * 1) DOWNLOADS_PRIVATE_ROOT must match file.php exactly.
+ * 1) DOWNLOADS_PRIVATE_ROOT must match index.php (site root) exactly.
  * 2) Set DOWNLOADS_SHOW_SETUP_ERRORS true briefly if this page is blank.
  */
 define('DOWNLOADS_PRIVATE_ROOT', '/home/sumbap/private_files/downloads');

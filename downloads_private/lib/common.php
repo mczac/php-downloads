@@ -199,8 +199,92 @@ function resolve_document_path(string $basename): ?string
     return $full;
 }
 
-/** Canonical public URL for file.php (no trailing slash). From bootstrap.php */
-function private_download_script_url(): string
+/** Origin (scheme + host + port) for the public download vhost; path in bootstrap is ignored. */
+function private_download_origin(): string
 {
-    return rtrim((string) ($GLOBALS['DOWNLOADS_BOOTSTRAP']['public_download_url'] ?? ''), '/');
+    $raw = rtrim((string) ($GLOBALS['DOWNLOADS_BOOTSTRAP']['public_download_url'] ?? ''), '/');
+    if ($raw === '') {
+        return '';
+    }
+
+    $parsed = parse_url($raw);
+    if ($parsed === false || !isset($parsed['scheme'], $parsed['host'])) {
+        return $raw;
+    }
+
+    $origin = $parsed['scheme'] . '://' . $parsed['host'];
+    if (isset($parsed['port'])) {
+        $origin .= ':' . $parsed['port'];
+    }
+
+    return $origin;
+}
+
+/** Full shareable download URL for a stored basename + hex password token. */
+function public_download_link(string $storedBase, string $passwordHex): string
+{
+    $origin = private_download_origin();
+    if ($origin === '') {
+        return '';
+    }
+
+    return $origin . '/?file=' . rawurlencode($storedBase)
+        . '&password=' . rawurlencode($passwordHex);
+}
+
+/**
+ * Full-screen dark HTML response for the public download host (no sensitive hints).
+ *
+ * @param 'unauthorized'|'expired'|'unavailable' $kind
+ */
+function downloads_gate_render_exit(int $httpStatus, string $kind): never
+{
+    while (ob_get_level() > 0) {
+        ob_end_clean();
+    }
+
+    $pages = [
+        'unauthorized' => [
+            'title' => 'Unauthorized',
+            'body' => 'Access denied. This link is invalid, incomplete, or not authorized.',
+        ],
+        'expired' => [
+            'title' => 'Expired',
+            'body' => 'This download link has expired and is no longer available.',
+        ],
+        'unavailable' => [
+            'title' => 'Unavailable',
+            'body' => 'Downloads cannot be served right now. Please try again later.',
+        ],
+    ];
+
+    $page = $pages[$kind] ?? $pages['unauthorized'];
+
+    http_response_code($httpStatus);
+    header('Content-Type: text/html; charset=UTF-8');
+    header('X-Robots-Tag: noindex, nofollow');
+    header('Cache-Control: no-store');
+    header('Referrer-Policy: no-referrer');
+
+    $title = htmlspecialchars($page['title'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    $body = htmlspecialchars($page['body'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+
+    echo '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">';
+    echo '<meta name="viewport" content="width=device-width, initial-scale=1">';
+    echo '<meta name="color-scheme" content="dark">';
+    echo '<title>' . $title . '</title>';
+    echo '<style>';
+    echo ':root{--bg:#050508;--text:#f4f4f5;--muted:#a1a1aa;--accent:#8b5cf6;--accent2:#d946ef;--card:rgba(24,24,27,.72);--stroke:rgba(255,255,255,.08);--glow:radial-gradient(ellipse 80% 60% at 50% -30%,rgba(139,92,246,.22),transparent 55%),radial-gradient(ellipse 60% 45% at 100% 80%,rgba(217,70,239,.12),transparent 50%),radial-gradient(ellipse 50% 40% at 0% 100%,rgba(34,211,238,.08),transparent 45%);}';
+    echo '*{box-sizing:border-box;}body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:clamp(1.25rem,4vw,2.5rem);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;background:var(--bg);background-image:var(--glow);color:var(--text);-webkit-font-smoothing:antialiased;}';
+    echo '.panel{width:100%;max-width:26rem;padding:clamp(1.75rem,4vw,2.35rem);border-radius:1rem;border:1px solid var(--stroke);background:var(--card);backdrop-filter:blur(18px);box-shadow:0 24px 80px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.06);}';
+    echo '.rule{height:3px;width:3rem;border-radius:999px;background:linear-gradient(90deg,var(--accent),var(--accent2));margin-bottom:1.35rem;}';
+    echo 'h1{font-size:clamp(1.55rem,4vw,1.85rem);font-weight:650;letter-spacing:-.03em;margin:0 0 .85rem;line-height:1.15;}';
+    echo 'p{margin:0;font-size:.98rem;line-height:1.55;color:var(--muted);}';
+    echo '</style></head><body><div class="panel" role="status">';
+    echo '<div class="rule" aria-hidden="true"></div>';
+    echo '<h1>' . $title . '</h1>';
+    echo '<p>' . $body . '</p>';
+    echo '</div></body></html>';
+
+    exit;
 }
