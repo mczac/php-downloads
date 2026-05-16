@@ -9,6 +9,13 @@ if (!defined('DOWNLOADS_APP_INIT')) {
     exit('Downloads app not initialized.');
 }
 
+$composerAutoload = DOWNLOADS_PRIVATE_ROOT . '/vendor/autoload.php';
+if (is_readable($composerAutoload)) {
+    require_once $composerAutoload;
+}
+
+require_once DOWNLOADS_PRIVATE_ROOT . '/lib/stats_enrichment.php';
+
 const DOC_BATCH_LIMIT = 100;
 
 function docupload_config(): array
@@ -48,7 +55,34 @@ function docupload_max_expiry(array $c): int
 }
 
 /**
- * Footer under the client email table: exact config text if set; otherwise per-file expiry lines from the batch.
+ * One footer sentence for a batch of links sharing the same UTC calendar expiry day.
+ *
+ * Uses exact clock time from the stored expiry only when every link in the group shares the same instant;
+ * otherwise states the calendar date only and clarifies that expiry is per-link (not a shared midnight).
+ */
+function doc_footer_expiry_line_for_group(int $linkCount, int $minTs, int $maxTs): string
+{
+    $datePart = gmdate('F j, Y', $minTs);
+    $sameInstant = $minTs === $maxTs;
+
+    if ($linkCount === 1) {
+        $timePart = gmdate('H:i:s', $minTs);
+
+        return 'Download link expires on ' . $datePart . ' at ' . $timePart . ' UTC.';
+    }
+
+    if ($sameInstant) {
+        $timePart = gmdate('H:i:s', $minTs);
+
+        return 'Download links expire on ' . $datePart . ' at ' . $timePart . ' UTC.';
+    }
+
+    return 'Download links expire on ' . $datePart . ' (UTC). Each link uses its own expiry time on that calendar day—not uniformly at 00:00:00 or 23:59:59 UTC.';
+}
+
+/**
+ * Footer under the client email table: exact config text if set; otherwise expiry lines from the batch.
+ * Expiring links are grouped by UTC calendar day so one upload session usually yields a single line.
  *
  * @param list<array{nice: string, expires_iso: ?string}> $batchRows
  */
@@ -59,19 +93,45 @@ function doc_batch_email_footer_for_export(array $config, array $batchRows): str
         return trim($t);
     }
 
-    $lines = [];
+    /** @var array<string, list<int>> $byDay */
+    $byDay = [];
+    $noExpiryLines = [];
+    $fallbackLines = [];
+
     foreach ($batchRows as $row) {
         $name = trim((string) ($row['nice'] ?? ''));
         if ($name === '') {
             $name = 'Document';
         }
-        $exp = isset($row['expires_iso']) ? $row['expires_iso'] : null;
-        if ($exp === null || $exp === '') {
-            $lines[] = $name . ': link does not expire.';
-        } else {
-            $lines[] = $name . ': link expires ' . format_until_label((string) $exp) . '.';
+        $exp = isset($row['expires_iso']) ? trim((string) $row['expires_iso']) : '';
+        if ($exp === '') {
+            $noExpiryLines[] = $name . ': link does not expire.';
+
+            continue;
         }
+
+        $ts = strtotime($exp);
+        if ($ts === false) {
+            $fallbackLines[] = $name . ': link expires ' . $exp . '.';
+
+            continue;
+        }
+
+        $day = gmdate('Y-m-d', $ts);
+        if (!isset($byDay[$day])) {
+            $byDay[$day] = [];
+        }
+        $byDay[$day][] = $ts;
     }
+
+    ksort($byDay);
+
+    $lines = [];
+    foreach ($byDay as $timestamps) {
+        $lines[] = doc_footer_expiry_line_for_group(count($timestamps), min($timestamps), max($timestamps));
+    }
+
+    $lines = array_merge($lines, $fallbackLines, $noExpiryLines);
 
     return implode("\n", $lines);
 }
@@ -100,7 +160,7 @@ function doc_library_expiry_line(array $meta): string
     return $days === 1 ? 'Expiring in 1 day' : 'Expiring in ' . (string) $days . ' days';
 }
 
-/** @return list<array{stored: string, nice: string, created: string, expires_at: string, until: string, expired: bool, missing: bool, expiry_detail: string, expiring_soon: bool}> */
+/** @return list<array{stored: string, nice: string, created: string, expires_at: string, until: string, expired: bool, missing: bool, expiry_detail: string}> */
 function doc_build_library_rows(): array
 {
     $registry = load_registry();
@@ -111,18 +171,8 @@ function doc_build_library_rows(): array
         }
         $path = resolve_document_path((string) $stored);
         $expired = registry_entry_is_expired($meta);
-        $detail = doc_library_expiry_line($meta);
-        $soon = false;
-        if (!$expired && !empty($meta['expires_at']) && is_string($meta['expires_at'])) {
-            $ts = strtotime($meta['expires_at']);
-            if ($ts !== false) {
-                $days = (int) ceil(($ts - time()) / 86400);
-                if ($days < 1) {
-                    $days = 1;
-                }
-                $soon = $days <= 7;
-            }
-        }
+        $missing = $path === null;
+        $detail = $missing ? 'File missing on server' : doc_library_expiry_line($meta);
         $library[] = [
             'stored' => (string) $stored,
             'nice' => registry_entry_display_name($meta),
@@ -130,9 +180,8 @@ function doc_build_library_rows(): array
             'expires_at' => isset($meta['expires_at']) ? (string) $meta['expires_at'] : '',
             'until' => format_until_label(isset($meta['expires_at']) && is_string($meta['expires_at']) ? $meta['expires_at'] : null),
             'expired' => $expired,
-            'missing' => $path === null || !is_readable($path),
+            'missing' => $missing,
             'expiry_detail' => $detail,
-            'expiring_soon' => $soon,
         ];
     }
 
@@ -184,7 +233,7 @@ function doc_redirect(): void
 
 function documents_dir(): string
 {
-    return rtrim((string) ($GLOBALS['DOWNLOADS_BOOTSTRAP']['documents_dir'] ?? ''), '/');
+    return rtrim(trim((string) ($GLOBALS['DOWNLOADS_BOOTSTRAP']['documents_dir'] ?? '')), '/');
 }
 
 function ensure_documents_dir(): void
@@ -225,7 +274,7 @@ function format_until_label(?string $expires_iso): string
         return $expires_iso;
     }
 
-    return gmdate('F j, Y', $ts) . ' UTC';
+    return gmdate('F j, Y \a\t H:i:s', $ts) . ' UTC';
 }
 
 /**
@@ -521,13 +570,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($path !== null && is_readable($path)) {
                 $meta = $registry[$storedBase];
                 $createdTs = isset($meta['created']) && is_string($meta['created']) ? strtotime($meta['created']) : false;
-                $capTs = false;
-                if ($createdTs !== false) {
-                    $capTs = $createdTs + $maxE * 86400;
-                }
-                if ($capTs === false) {
-                    $capTs = time() + $maxE * 86400;
-                }
+                $rawCap = $createdTs !== false
+                    ? $createdTs + $maxE * 86400
+                    : time() + $maxE * 86400;
+                $capTs = downloads_end_of_utc_day_timestamp($rawCap);
 
                 $currentExp = isset($meta['expires_at']) && is_string($meta['expires_at']) ? strtotime($meta['expires_at']) : false;
                 $baseTs = time();
@@ -535,7 +581,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $baseTs = $currentExp;
                 }
 
-                $newTs = $baseTs + $addDays * 86400;
+                $newTs = downloads_end_of_utc_day_timestamp($baseTs + $addDays * 86400);
                 if ($newTs > $capTs) {
                     $newTs = $capTs;
                 }
@@ -822,6 +868,8 @@ if ($activeTab === 'portal') {
         }));
     }
 
+    $statsRows = array_map('downloads_stats_row_enrich', $statsRows);
+
     $defExp = 0;
     $maxExp = 0;
     $batch = [];
@@ -894,7 +942,8 @@ $flashNewLink = (is_array($flash) && isset($flash['new_link'])) ? (string) $flas
         .stats-toolbar select { max-width: 12rem; }
         .stat-chips { display: flex; flex-wrap: wrap; gap: 0.45rem; align-items: center; }
         .stats-table-wrap { overflow-x: auto; margin-top: 0.5rem; }
-        td.ua-cell { max-width: 14rem; font-size: 0.78rem; color: var(--muted); word-break: break-word; }
+        td.ua-cell { max-width: 12rem; font-size: 0.78rem; color: var(--muted); word-break: break-word; }
+        td.stats-meta-cell { max-width: 11rem; font-size: 0.78rem; color: var(--muted); word-break: break-word; }
         .stack-portal { display: flex; flex-direction: column; gap: 1.25rem; }
         .card {
             background: var(--card);
@@ -1070,7 +1119,7 @@ $flashNewLink = (is_array($flash) && isset($flash['new_link'])) ? (string) $flas
                 <?php if ($batch === []): ?>
                     <p class="muted">Nothing queued yet.</p>
                 <?php else: ?>
-                    <p class="muted" style="margin-top:0;">Copy HTML or plain text into your email. Footer shows each link’s expiry (or your custom footer text from config).</p>
+                    <p class="muted" style="margin-top:0;">Copy HTML or plain text into your email. New uploads and extensions use <strong>end of UTC calendar day</strong> (<code>23:59:59 UTC</code>) for expiry. Auto footer groups links that share that instant; older rows may still show per-link variance until renewed. Override with <code>batch_email_footer</code> in config.</p>
 
                     <table class="batch-queue-table" style="margin-top:0.75rem;">
                         <thead>
@@ -1140,18 +1189,13 @@ $flashNewLink = (is_array($flash) && isset($flash['new_link'])) ? (string) $flas
                             <tr>
                                 <td>
                                     <?php echo htmlspecialchars($row['nice'] !== '' ? $row['nice'] : '—', ENT_QUOTES, 'UTF-8'); ?>
-                                    <?php if ($row['missing']): ?>
-                                        <span class="pill bad">Missing file</span>
-                                    <?php endif; ?>
                                     <br><code><?php echo htmlspecialchars($row['stored'], ENT_QUOTES, 'UTF-8'); ?></code>
                                 </td>
                                 <td>
                                     <?php if ($row['missing']): ?>
-                                        <span class="pill bad">Missing</span>
+                                        <span class="pill warn">Missing</span>
                                     <?php elseif ($row['expired']): ?>
                                         <span class="pill bad">Expired</span>
-                                    <?php elseif (!empty($row['expiring_soon'])): ?>
-                                        <span class="pill warn">Expiring soon</span>
                                     <?php else: ?>
                                         <span class="pill ok">Active</span>
                                     <?php endif; ?>
@@ -1201,6 +1245,7 @@ $flashNewLink = (is_array($flash) && isset($flash['new_link'])) ? (string) $flas
         <?php else: ?>
         <div class="card">
             <p class="muted" style="margin-top:0;">Download log (<code>downloads_YYYY-MM.log</code> in <code>log_dir</code>). Newest first, last 500 lines. Errors also go to <code>php_errors_YYYY-MM.log</code>.</p>
+            <p class="muted" style="margin-top:0.5rem;font-size:0.85rem;">Each row stores <code>CF-IPCountry</code> (if behind Cloudflare), <code>Accept-Language</code>, and <code>Referer</code> when the client sends them. Country prefers that header, then optional GeoLite2 (<code>geoip_country_mmdb</code>), then cached HTTPS geolocation (ipwho.is) — enabled by default unless you set <code>geoip_allow_online_lookup</code> to <code>false</code> in <code>bootstrap.php</code>.</p>
 
             <?php if ($statsLogPath === ''): ?>
                 <div class="banner bad"><code>log_dir</code> is not set — fix <code>bootstrap.php</code> and reload.</div>
@@ -1253,8 +1298,11 @@ $flashNewLink = (is_array($flash) && isset($flash['new_link'])) ? (string) $flas
                                         <th>Time (UTC)</th>
                                         <th>Result</th>
                                         <th>Document / detail</th>
+                                        <th>Country</th>
+                                        <th>Language</th>
+                                        <th>Referrer</th>
                                         <th>IP</th>
-                                        <th>Client</th>
+                                        <th>Browser</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -1273,8 +1321,11 @@ $flashNewLink = (is_array($flash) && isset($flash['new_link'])) ? (string) $flas
                                                 <?php endif; ?>
                                             </td>
                                             <td><?php echo htmlspecialchars($sr['file_note'], ENT_QUOTES, 'UTF-8'); ?></td>
+                                            <td class="stats-meta-cell"><?php echo htmlspecialchars($sr['country_display'], ENT_QUOTES, 'UTF-8'); ?></td>
+                                            <td class="stats-meta-cell"><code><?php echo htmlspecialchars($sr['lang_primary'], ENT_QUOTES, 'UTF-8'); ?></code></td>
+                                            <td class="stats-meta-cell" title="<?php echo htmlspecialchars($sr['referer'], ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars($sr['referrer_short'], ENT_QUOTES, 'UTF-8'); ?></td>
                                             <td><code><?php echo htmlspecialchars($sr['ip'], ENT_QUOTES, 'UTF-8'); ?></code></td>
-                                            <td class="ua-cell"><?php echo htmlspecialchars($sr['ua'], ENT_QUOTES, 'UTF-8'); ?></td>
+                                            <td class="ua-cell" title="<?php echo htmlspecialchars($sr['ua'], ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars($sr['client_hint'], ENT_QUOTES, 'UTF-8'); ?></td>
                                         </tr>
                                     <?php endforeach; ?>
                                 </tbody>

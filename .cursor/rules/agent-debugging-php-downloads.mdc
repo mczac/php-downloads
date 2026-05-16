@@ -1,0 +1,34 @@
+---
+description: Debugging discipline — avoid hosting guesses, verify control flow, PHP downloads app pitfalls
+alwaysApply: true
+---
+
+# Debugging and change discipline (PHP / downloads_private)
+
+## Code before hosting
+
+- If the user says **only code or deploy changed** (paths, ownership, layout unchanged), **do not** suggest `chmod`, `chown`, permission tweaks, or `open_basedir` theories until **the PHP control path is proven wrong** by reading the relevant files (grep + full function bodies).
+- **Never** present filesystem fixes as the default explanation for regressions after a merge or refactor.
+
+## Uniform failure = suspect the predicate’s inputs
+
+- When **every** row, item, or request fails the **same** boolean (e.g. all “Missing”, all null), **before** touching helpers like `resolve_*`:
+  - Open the **caller** (e.g. the `foreach` that builds library rows).
+  - Confirm every variable used in the condition is **assigned on each iteration** (`$path`, `$expired`, etc.).
+- A loop that uses `$path === null` **without** `$path = resolve_document_path(...)` in that loop will mark **everything** missing regardless of disk — verify this pattern explicitly.
+
+## Read producer and consumer together
+
+- For “file missing” / path bugs, trace **both** ends in one pass: **who sets “missing”** (e.g. `doc_build_library_rows`) and **who resolves the path** (e.g. `resolve_document_path`), plus **`documents_real_dir`** if involved.
+
+## Semantics of checks
+
+- Do not add **`is_readable()`** (or similar) to mean “file exists” unless the product explicitly requires it; it diverges from **`stat`/`realpath`** behaviour and has burned this project when combined with hosting assumptions.
+
+## UI copy
+
+- Do not add **accusatory banners** (“wrong folder”, “not readable there”) when the failure mode is still ambiguous; they read as blaming the server after the user said only code changed.
+
+## Minimal diffs when fixing regressions
+
+- Prefer **restoring the last known-good predicate** over stacking new security or normalization layers until the original bug is identified.

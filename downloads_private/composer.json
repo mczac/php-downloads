@@ -1,0 +1,11 @@
+{
+    "name": "sumba/downloads-private",
+    "description": "Optional Composer deps for secure downloads (GeoLite2 MMDB reader)",
+    "require": {
+        "php": ">=8.1",
+        "geoip2/geoip2": "^2.13"
+    },
+    "config": {
+        "sort-packages": true
+    }
+}

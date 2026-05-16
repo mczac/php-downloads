@@ -1,1 +1,3 @@
 .DS_Store
+scripts/deploy.env
+downloads_private/vendor/

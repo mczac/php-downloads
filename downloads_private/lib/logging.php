@@ -109,34 +109,72 @@ function downloads_available_download_log_months(int $limit = 24): array
     return array_slice($months, 0, max(1, $limit));
 }
 
+function downloads_log_sanitize_header_field(string $value, int $maxLen): string
+{
+    $value = str_replace(["\t", "\r", "\n"], ' ', $value);
+    if (strlen($value) > $maxLen) {
+        $value = substr($value, 0, $maxLen);
+    }
+
+    return $value !== '' ? $value : '-';
+}
+
 /**
  * Parse one downloads log row written by downloads_log('downloads', …).
  *
- * @return array{iso:string,ip:string,ua:string,payload:string,result:string,label:string,file_note:string}|null
+ * Extended rows (7 columns): iso, ip, ua, cf_country, accept_language, referer, payload.
+ * Legacy rows (4 columns): iso, ip, ua, payload.
+ *
+ * @return array{
+ *   iso:string,
+ *   ip:string,
+ *   ua:string,
+ *   cf_country:string,
+ *   accept_language:string,
+ *   referer:string,
+ *   payload:string,
+ *   result:string,
+ *   label:string,
+ *   file_note:string
+ * }|null
  */
 function downloads_parse_download_log_line(string $line): ?array
 {
-    $parts = explode("\t", $line, 4);
-    if (count($parts) < 4) {
-        return null;
+    $extended = explode("\t", $line, 7);
+    if (count($extended) === 7) {
+        [$iso, $ip, $ua, $cf_country, $accept_language, $referer, $payload] = $extended;
+    } else {
+        $legacy = explode("\t", $line, 4);
+        if (count($legacy) !== 4) {
+            return null;
+        }
+        [$iso, $ip, $ua, $payload] = $legacy;
+        $cf_country = '';
+        $accept_language = '';
+        $referer = '';
     }
 
-    [$iso, $ip, $ua, $payload] = $parts;
     $payload = trim($payload);
     if ($payload === '') {
         return null;
     }
+
+    $base = [
+        'iso' => $iso,
+        'ip' => $ip,
+        'ua' => $ua,
+        'cf_country' => $cf_country,
+        'accept_language' => $accept_language,
+        'referer' => $referer,
+        'payload' => $payload,
+    ];
 
     if (preg_match('/^ok\|([^|]*)\|as\|(.*)$/', $payload, $m)) {
         $stored = $m[1];
         $as = $m[2];
         $note = $as !== '' ? $as : $stored;
 
-        return [
-            'iso' => $iso,
-            'ip' => $ip,
-            'ua' => $ua,
-            'payload' => $payload,
+        return $base + [
             'result' => 'ok',
             'label' => 'Success',
             'file_note' => $note !== '' ? $note : '—',
@@ -161,11 +199,7 @@ function downloads_parse_download_log_line(string $line): ?array
         $file_note = $fm[1];
     }
 
-    return [
-        'iso' => $iso,
-        'ip' => $ip,
-        'ua' => $ua,
-        'payload' => $payload,
+    return $base + [
         'result' => 'err',
         'label' => $label,
         'file_note' => $file_note,
@@ -193,7 +227,22 @@ function downloads_log(string $basename, string $line): void
     }
     $ip = $_SERVER['REMOTE_ADDR'] ?? '-';
     $ua = isset($_SERVER['HTTP_USER_AGENT']) ? substr((string) $_SERVER['HTTP_USER_AGENT'], 0, 200) : '-';
-    $row = gmdate('c') . "\t" . $ip . "\t" . $ua . "\t" . $line . "\n";
+
+    $cfRaw = isset($_SERVER['HTTP_CF_IPCOUNTRY']) ? (string) $_SERVER['HTTP_CF_IPCOUNTRY'] : '';
+    $cf = '-';
+    if ($cfRaw !== '') {
+        $cfClean = strtoupper(substr(preg_replace('/[^A-Za-z]/', '', $cfRaw), 0, 2));
+        $cf = $cfClean !== '' ? $cfClean : '-';
+    }
+
+    $acceptLang = isset($_SERVER['HTTP_ACCEPT_LANGUAGE'])
+        ? downloads_log_sanitize_header_field((string) $_SERVER['HTTP_ACCEPT_LANGUAGE'], 160)
+        : '-';
+    $referer = isset($_SERVER['HTTP_REFERER'])
+        ? downloads_log_sanitize_header_field((string) $_SERVER['HTTP_REFERER'], 400)
+        : '-';
+
+    $row = gmdate('c') . "\t" . $ip . "\t" . $ua . "\t" . $cf . "\t" . $acceptLang . "\t" . $referer . "\t" . $line . "\n";
 
     @file_put_contents($file, $row, FILE_APPEND | LOCK_EX);
 

@@ -93,13 +93,33 @@ function registry_entry_is_expired(array $entry): bool
     return $ts < time();
 }
 
+/**
+ * Unix timestamp for 23:59:59 UTC on the same calendar day as $unixTimestamp (UTC date).
+ */
+function downloads_end_of_utc_day_timestamp(int $unixTimestamp): int
+{
+    $ymd = gmdate('Y-m-d', $unixTimestamp);
+    try {
+        $dt = new DateTimeImmutable($ymd . ' 23:59:59', new DateTimeZone('UTC'));
+    } catch (Exception $e) {
+        return $unixTimestamp;
+    }
+
+    return $dt->getTimestamp();
+}
+
+/**
+ * Expiry instant: end of UTC calendar day reached by adding $days × 24h to "now", then rounding up to that day's 23:59:59 UTC.
+ */
 function expires_at_from_days(int $days): ?string
 {
     if ($days <= 0) {
         return null;
     }
 
-    return gmdate('c', time() + $days * 86400);
+    $anchor = time() + $days * 86400;
+
+    return gmdate('c', downloads_end_of_utc_day_timestamp($anchor));
 }
 
 /**
@@ -144,9 +164,18 @@ function documents_real_dir(): ?string
         return null;
     }
 
-    $p = realpath($raw);
+    $trimmed = rtrim(trim($raw), '/\\');
+    if ($trimmed === '') {
+        return null;
+    }
 
-    return $p !== false ? $p : null;
+    $resolved = realpath($trimmed);
+    if ($resolved !== false) {
+        return $resolved;
+    }
+
+    // realpath() can fail under open_basedir or odd mounts while the directory is still usable.
+    return is_dir($trimmed) ? $trimmed : null;
 }
 
 function resolve_document_path(string $basename): ?string
@@ -161,7 +190,7 @@ function resolve_document_path(string $basename): ?string
         return null;
     }
 
-    $full = realpath($documentsDir . '/' . $base);
+    $full = realpath($documentsDir . DIRECTORY_SEPARATOR . $base);
     $prefix = $documentsDir . DIRECTORY_SEPARATOR;
     if ($full === false || strpos($full, $prefix) !== 0) {
         return null;

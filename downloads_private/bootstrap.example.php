@@ -24,4 +24,11 @@ return [
     // Public download URL used when generating links (no trailing slash)
     // Must match the script name on download.sumbaprop.com (here: file.php).
     'public_download_url' => 'https://download.sumbaprop.com/file.php',
+
+    // Optional: absolute path to GeoLite2-Country.mmdb (requires `composer install` in this folder).
+    // 'geoip_country_mmdb' => '/home/sumbap/private_files/downloads/GeoLite2-Country.mmdb',
+
+    // Country in Statistics: GeoLite2 MMDB path (optional), Cloudflare CF-IPCountry in logs (optional),
+    // then HTTPS lookup via ipwho.is (cached under log_dir/.geo_cache/). Online lookup defaults ON when this key is omitted; set false to disable (air‑gapped hosts).
+    // 'geoip_allow_online_lookup' => false,
 ];

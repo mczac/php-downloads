@@ -44,3 +44,11 @@ Blank page on file.php or admin:
    - You must copy bootstrap.example.php to bootstrap.php on the server (the .example file is never loaded).
    - Upload the contents of downloads_private/ directly into private_files/downloads (avoid an extra nesting folder).
    - Use admin/setup_check.php?key=... once (edit path + secret inside that file), then delete setup_check.php.
+
+F) Optional — rsync deploy from your Mac (same idea as Sumba Core `deploy.sh`):
+   cp scripts/deploy.env.example scripts/deploy.env
+   Edit: SSH_HOST (84.247.175.224 or sumbaprop.com), SSH_USER, SSH_KEY, REMOTE_PUBLIC, REMOTE_PRIVATE.
+   Load passphrase-protected key once: ssh-add --apple-use-keychain ~/.ssh/id_rsa_sumbaprop
+   ./scripts/deploy_downloads.sh
+   Dry run: DRY_RUN=1 ./scripts/deploy_downloads.sh
+   Optional faster SSH: USE_SSH_MUX=1 in deploy.env (see script header).
