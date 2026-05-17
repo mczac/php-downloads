@@ -386,7 +386,15 @@ function format_download_block_html(string $absoluteUrl): string
 }
 
 /**
- * HTML fragment for email / preview: responsive table + footer (left-aligned; document names stay on one line on desktop).
+ * Email export / preview: drop redundant ".pdf" suffix from labels (does not change stored filenames).
+ */
+function docupload_email_display_document_label(string $nice): string
+{
+    return preg_replace('/\.pdf$/i', '', $nice);
+}
+
+/**
+ * HTML fragment for email / preview: responsive table + footer (narrow document column, wide link column; links clamp ~2 lines where supported).
  *
  * @param list<array{nice: string, link: string}> $rows
  */
@@ -404,6 +412,7 @@ function build_email_html_table(array $rows, string $footerPlain): string
         . 'table.docs-table tr{border:1px solid #e5e7eb !important;border-radius:8px;margin-bottom:12px;background:#ffffff;}'
         . 'table.docs-table td.cell{border-bottom:1px solid #f3f4f6 !important;white-space:normal !important;padding:12px 14px !important;}'
         . 'table.docs-table td.cell.doc-col{white-space:normal !important;}'
+        . 'table.docs-table td.cell.link-col div.docs-link-wrap{-webkit-line-clamp:4 !important;max-height:none !important;}'
         . 'table.docs-table tr td.cell:last-child{border-bottom:0 !important;}'
         . 'table.docs-table .mobile-label{display:block !important;margin-bottom:4px;}'
         . '}</style>';
@@ -411,28 +420,32 @@ function build_email_html_table(array $rows, string $footerPlain): string
     $wrapOpen = '<div style="text-align:left;margin:0;padding:0;width:100%;">';
 
     $tableOpen = '<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" class="docs-table" '
-        . 'style="border-collapse:separate;border-spacing:0;width:100%;max-width:920px;margin:0;'
+        . 'style="border-collapse:separate;border-spacing:0;width:100%;max-width:960px;margin:0;'
         . 'font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Arial,sans-serif;'
-        . 'background:#ffffff;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;table-layout:auto;">';
+        . 'background:#ffffff;border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;table-layout:fixed;">';
+
+    $colgroup = '<colgroup><col style="width:32%;"><col style="width:68%;"></colgroup>';
 
     $thead = '<thead><tr style="background:#f9fafb;">'
-        . '<th align="left" style="padding:12px 16px;font-size:11px;font-weight:600;letter-spacing:0.6px;text-transform:uppercase;color:#6b7280;border-bottom:1px solid #e5e7eb;white-space:nowrap;">Document</th>'
+        . '<th align="left" style="padding:12px 16px;font-size:11px;font-weight:600;letter-spacing:0.6px;text-transform:uppercase;color:#6b7280;border-bottom:1px solid #e5e7eb;">Document</th>'
         . '<th align="left" style="padding:12px 16px;font-size:11px;font-weight:600;letter-spacing:0.6px;text-transform:uppercase;color:#6b7280;border-bottom:1px solid #e5e7eb;">Link</th>'
         . '</tr></thead><tbody>';
 
     $tbody = '';
     foreach ($rows as $r) {
-        $nice = htmlspecialchars($r['nice'], ENT_QUOTES, 'UTF-8');
+        $nice = htmlspecialchars(docupload_email_display_document_label($r['nice']), ENT_QUOTES, 'UTF-8');
         $hrefEsc = htmlspecialchars($r['link'], ENT_QUOTES, 'UTF-8');
 
         $tbody .= '<tr>';
-        $tbody .= '<td class="cell doc-col" style="padding:14px 16px;border-bottom:1px solid #e5e7eb;font-size:14px;color:#111827;font-weight:600;vertical-align:top;text-align:left;white-space:nowrap;">';
+        $tbody .= '<td class="cell doc-col" style="padding:14px 16px;border-bottom:1px solid #e5e7eb;font-size:14px;color:#111827;font-weight:600;vertical-align:middle;text-align:left;white-space:normal;word-break:break-word;overflow-wrap:anywhere;">';
         $tbody .= '<span class="mobile-label" style="display:none;font-size:11px;font-weight:600;letter-spacing:0.5px;text-transform:uppercase;color:#6b7280;">Document<br></span>';
         $tbody .= $nice;
         $tbody .= '</td>';
-        $tbody .= '<td class="cell" style="padding:14px 16px;border-bottom:1px solid #e5e7eb;font-size:13px;vertical-align:top;text-align:left;word-break:break-all;overflow-wrap:anywhere;white-space:normal;">';
+        $tbody .= '<td class="cell link-col" style="padding:14px 16px;border-bottom:1px solid #e5e7eb;font-size:12px;vertical-align:middle;text-align:left;">';
         $tbody .= '<span class="mobile-label" style="display:none;font-size:11px;font-weight:600;letter-spacing:0.5px;text-transform:uppercase;color:#6b7280;">Link<br></span>';
-        $tbody .= '<a href="' . $hrefEsc . '" style="color:#2563eb;text-decoration:underline;word-break:break-all;overflow-wrap:anywhere;">' . $hrefEsc . '</a>';
+        $tbody .= '<div class="docs-link-wrap" style="display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;word-break:break-all;line-height:1.38;max-height:2.76em;">';
+        $tbody .= '<a href="' . $hrefEsc . '" style="color:#2563eb;text-decoration:underline;word-break:break-all;">' . $hrefEsc . '</a>';
+        $tbody .= '</div>';
         $tbody .= '</td>';
         $tbody .= '</tr>';
     }
@@ -444,7 +457,7 @@ function build_email_html_table(array $rows, string $footerPlain): string
 
     $wrapClose = '</div>';
 
-    return $wrapOpen . $style . $tableOpen . $thead . $tbody . $tableClose . $footer . $wrapClose;
+    return $wrapOpen . $style . $tableOpen . $colgroup . $thead . $tbody . $tableClose . $footer . $wrapClose;
 }
 
 /**
@@ -458,7 +471,7 @@ function build_email_plain(array $rows, string $footerPlain): string
 
     $blocks = [];
     foreach ($rows as $r) {
-        $blocks[] = $r['nice'] . "\n" . $r['link'];
+        $blocks[] = docupload_email_display_document_label($r['nice']) . "\n" . $r['link'];
     }
 
     return implode("\n\n---\n\n", $blocks) . "\n\n---\n\n" . $footerPlain;
@@ -613,6 +626,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     $action = isset($_POST['action']) ? (string) $_POST['action'] : '';
+
+    // Entire multipart POST discarded (typically POST body > post_max_size): $_POST and $_FILES empty,
+    // so action/csrf vanish and CSRF check falsely returns "Bad CSRF token".
+    if (
+        wants_json_response()
+        && $_POST === []
+        && (!isset($_FILES['file']) || !is_array($_FILES['file']))
+    ) {
+        $cl = isset($_SERVER['CONTENT_LENGTH']) ? (int) $_SERVER['CONTENT_LENGTH'] : 0;
+        if ($cl > 0) {
+            respond_json(
+                false,
+                'Upload rejected by PHP: POST body was discarded (often total size exceeds post_max_size = '
+                    . ini_get('post_max_size')
+                    . ', while upload_max_filesize = '
+                    . ini_get('upload_max_filesize')
+                    . '). The full request is larger than the file alone—raise post_max_size (and upload_max_filesize if needed), then retry.',
+                [],
+                413
+            );
+            exit;
+        }
+    }
 
     $jsonUploadBypassCsrf = wants_json_response() && $action === 'upload';
     if (!$jsonUploadBypassCsrf && !docupload_verify_csrf($csrf)) {
@@ -1127,6 +1163,11 @@ $flashNewLink = (is_array($flash) && isset($flash['new_link'])) ? (string) $flas
             -webkit-overflow-scrolling: touch;
         }
         .stats-table-wrap table.stats-table { width: 100%; min-width: 72rem; border-collapse: collapse; font-size: 0.82rem; }
+        .stats-table-wrap table.stats-table th,
+        .stats-table-wrap table.stats-table td {
+            vertical-align: middle;
+            padding: 0.5rem 0.4rem;
+        }
         td.stats-result-cell { white-space: nowrap; vertical-align: middle; }
         td.stats-ip-cell { white-space: nowrap; vertical-align: middle; max-width: none; }
         .stats-ip-trigger {
@@ -1139,8 +1180,9 @@ $flashNewLink = (is_array($flash) && isset($flash['new_link'])) ? (string) $flas
             border: 1px solid var(--border);
             background: color-mix(in srgb, var(--card) 88%, var(--accent));
             color: var(--accent);
-            display: inline-block;
-            vertical-align: baseline;
+            display: inline-flex;
+            align-items: center;
+            vertical-align: middle;
         }
         .stats-ip-trigger:hover, .stats-ip-trigger:focus-visible {
             border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
@@ -1199,9 +1241,16 @@ $flashNewLink = (is_array($flash) && isset($flash['new_link'])) ? (string) $flas
             gap: 0.65rem 0.85rem;
             padding: 0.85rem 1rem 1rem;
             font-size: 0.78rem;
+            align-items: center;
+        }
+        .stats-ip-popover .geo-grid > div {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            min-height: 2.35rem;
         }
         .stats-ip-popover .geo-k {
-            margin: 0;
+            margin: 0 0 0.15rem;
             font-size: 0.65rem;
             font-weight: 650;
             text-transform: uppercase;
@@ -1209,13 +1258,25 @@ $flashNewLink = (is_array($flash) && isset($flash['new_link'])) ? (string) $flas
             color: var(--muted);
         }
         .stats-ip-popover .geo-v {
-            margin: 0.12rem 0 0;
+            margin: 0;
             font-weight: 600;
             word-break: break-word;
+            line-height: 1.35;
         }
         .stats-ip-popover .geo-msg { padding: 0.85rem 1rem 1rem; font-size: 0.82rem; color: var(--muted); }
-        td.ua-cell { max-width: 12rem; font-size: 0.78rem; color: var(--muted); word-break: break-word; }
-        td.stats-meta-cell { max-width: 11rem; font-size: 0.78rem; color: var(--muted); word-break: break-word; }
+        td.ua-cell { max-width: 12rem; font-size: 0.78rem; color: var(--muted); word-break: break-word; vertical-align: middle; }
+        .stats-table-wrap td.stats-meta-cell {
+            max-width: 14rem;
+            font-size: 0.78rem;
+            color: var(--muted);
+            word-break: break-word;
+            vertical-align: middle;
+        }
+        .stats-table-wrap td.stats-doc-cell {
+            max-width: 20rem;
+            vertical-align: middle;
+            word-break: break-word;
+        }
         .stack-portal { display: flex; flex-direction: column; gap: 1.25rem; }
         .card {
             background: var(--card);
@@ -1747,7 +1808,7 @@ $flashNewLink = (is_array($flash) && isset($flash['new_link'])) ? (string) $flas
                                                     <span class="pill bad"><?php echo htmlspecialchars($sr['label'], ENT_QUOTES, 'UTF-8'); ?></span>
                                                 <?php endif; ?>
                                             </td>
-                                            <td><?php echo htmlspecialchars($sr['file_note'], ENT_QUOTES, 'UTF-8'); ?></td>
+                                            <td class="stats-doc-cell"><?php echo htmlspecialchars($sr['file_note'], ENT_QUOTES, 'UTF-8'); ?></td>
                                             <td class="stats-meta-cell"><?php echo htmlspecialchars($sr['country_display'], ENT_QUOTES, 'UTF-8'); ?></td>
                                             <td class="stats-ip-cell">
                                                 <?php if ($sr['ip'] !== '' && $sr['ip'] !== '-'): ?>
@@ -2118,8 +2179,8 @@ $flashNewLink = (is_array($flash) && isset($flash['new_link'])) ? (string) $flas
             '<div><div class="geo-k">Region</div><div class="geo-v">' + esc(data.region) + '</div></div>' +
             '<div><div class="geo-k">Country</div><div class="geo-v">' + esc(data.country) + '</div></div>' +
             '<div><div class="geo-k">ISP</div><div class="geo-v">' + esc(data.isp) + '</div></div>' +
-            '<div><div class="geo-k">Latitude</div><div class="geo-v">' + esc(hasLL ? Number(data.lat).toFixed(5) : '—') + '</div></div>' +
-            '<div><div class="geo-k">Longitude</div><div class="geo-v">' + esc(hasLL ? Number(data.lng).toFixed(5) : '—') + '</div></div>' +
+            '<div><div class="geo-k">Latitude</div><div class="geo-v">' + esc(hasLL ? Number(data.lat).toFixed(5) + '\u00b0' : '\u2014') + '</div></div>' +
+            '<div><div class="geo-k">Longitude</div><div class="geo-v">' + esc(hasLL ? Number(data.lng).toFixed(5) + '\u00b0' : '\u2014') + '</div></div>' +
             '</div>';
 
         var host = document.getElementById('statsLeafletHost');
