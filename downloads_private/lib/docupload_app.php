@@ -410,14 +410,17 @@ function build_email_html_table(array $rows, string $footerPlain): string
         . 'table.docs-table thead{display:none !important;}'
         . 'table.docs-table,table.docs-table tbody,table.docs-table tr,table.docs-table td{display:block !important;width:100% !important;box-sizing:border-box;}'
         . 'table.docs-table tr{border:1px solid #e5e7eb !important;border-radius:8px;margin-bottom:12px;background:#ffffff;}'
-        . 'table.docs-table td.cell{border-bottom:1px solid #f3f4f6 !important;white-space:normal !important;padding:12px 14px !important;}'
-        . 'table.docs-table td.cell.doc-col{white-space:normal !important;}'
-        . 'table.docs-table td.cell.link-col div.docs-link-wrap{-webkit-line-clamp:4 !important;max-height:none !important;}'
+        . 'table.docs-table td.cell{border-bottom:1px solid #f3f4f6 !important;white-space:normal !important;padding:14px 16px !important;}'
+        . 'table.docs-table td.cell.doc-col{white-space:normal !important;font-size:17px !important;line-height:1.45 !important;}'
+        . 'table.docs-table td.cell.link-col{font-size:15px !important;}'
+        . 'table.docs-table td.cell.link-col a{font-size:15px !important;line-height:1.42 !important;}'
+        . 'table.docs-table td.cell.link-col div.docs-link-wrap{-webkit-line-clamp:4 !important;max-height:none !important;line-height:1.42 !important;}'
         . 'table.docs-table tr td.cell:last-child{border-bottom:0 !important;}'
-        . 'table.docs-table .mobile-label{display:block !important;margin-bottom:4px;}'
+        . 'table.docs-table .mobile-label{display:block !important;margin-bottom:6px;font-size:12px !important;}'
+        . 'p.docs-email-footnote{font-size:11px !important;line-height:1.45 !important;color:#6b7280 !important;}'
         . '}</style>';
 
-    $wrapOpen = '<div style="text-align:left;margin:0;padding:0;width:100%;">';
+    $wrapOpen = '<div class="docs-email-wrap" style="text-align:left;margin:0;padding:0;width:100%;-webkit-text-size-adjust:100%;text-size-adjust:100%;">';
 
     $tableOpen = '<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" class="docs-table" '
         . 'style="border-collapse:separate;border-spacing:0;width:100%;max-width:960px;margin:0;'
@@ -452,7 +455,7 @@ function build_email_html_table(array $rows, string $footerPlain): string
 
     $tableClose = '</tbody></table>';
 
-    $footer = '<p style="margin:16px 0 0;padding:0;text-align:left;font-size:12px;line-height:1.5;color:#6b7280;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Arial,sans-serif;">'
+    $footer = '<p class="docs-email-footnote" style="margin:16px 0 0;padding:0;text-align:left;font-size:12px;line-height:1.5;color:#6b7280;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Arial,sans-serif;">'
         . $footerEsc . '</p>';
 
     $wrapClose = '</div>';

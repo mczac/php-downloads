@@ -15,6 +15,15 @@ RewriteRule ^admin$ admin/ [L]
 </IfModule>
 </IfModule>
 
+# Unknown paths (e.g. /blabla) → front controller so visitors see the app's Unauthorized page,
+# not Apache's default 404 / broken ErrorDocument chain.
+<IfModule mod_rewrite.c>
+RewriteEngine On
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^ index.php [L]
+</IfModule>
+
 # php -- BEGIN cPanel-generated handler, do not edit
 # Set the “ea-php82” package as the default “PHP” programming language.
 <IfModule mime_module>

@@ -26,6 +26,8 @@ D) Generated links:
    Generated URLs look like:
    https://download.sumbaprop.com/?file=...&password=...
    (Document root serves index.php via DirectoryIndex.)
+   Root .htaccess rewrites missing files/dirs to index.php so bogus paths show Unauthorized (403),
+   not Apache's generic 404 page.
 
 E) Main domain sumbaprop.com:
    - Point document root to public_html/main (move current site there), OR
